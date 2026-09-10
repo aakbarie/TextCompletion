@@ -2,7 +2,9 @@ use anyhow::{anyhow, Context, Result};
 use directories::ProjectDirs;
 use std::sync::Arc;
 use textcompletion::{
+    expansion::SharedSnippetIndex,
     model::{now_epoch_seconds, Snippet},
+    runtime::spawn_global_binding,
     storage::{SnippetRepository, SqliteSnippetRepository},
 };
 
@@ -11,12 +13,18 @@ slint::include_modules!();
 fn main() -> Result<()> {
     let db_path = database_path()?;
     let repository = Arc::new(SqliteSnippetRepository::open(&db_path)?);
+    let index = SharedSnippetIndex::default();
+    refresh_index(repository.as_ref(), &index)?;
 
-    let ui = AppWindow::new().context("failed to create TextCompletion window")?;
+    // Keep the global binding thread alive for the lifetime of the UI.
+    let _binding_thread = spawn_global_binding(index.clone());
+
+    let ui = AppWindow::new().context("failed to create Scriblet window")?;
 
     {
         let ui_weak = ui.as_weak();
         let repository = Arc::clone(&repository);
+        let index = index.clone();
 
         ui.on_save_snippet(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
@@ -38,7 +46,10 @@ fn main() -> Result<()> {
             snippet.updated_at = now_epoch_seconds();
 
             match repository.upsert(&snippet) {
-                Ok(()) => ui.set_status_text(format!("Saved {trigger}").into()),
+                Ok(()) => match refresh_index(repository.as_ref(), &index) {
+                    Ok(()) => ui.set_status_text(format!("Saved {trigger}").into()),
+                    Err(error) => ui.set_status_text(format!("Saved, but binding refresh failed: {error}").into()),
+                },
                 Err(error) => ui.set_status_text(format!("Save failed: {error}").into()),
             }
         });
@@ -56,12 +67,27 @@ fn main() -> Result<()> {
         });
     }
 
-    ui.run().context("TextCompletion UI exited with an error")?;
+    ui.run().context("Scriblet UI exited with an error")?;
+    Ok(())
+}
+
+fn refresh_index(
+    repository: &SqliteSnippetRepository,
+    index: &SharedSnippetIndex,
+) -> Result<()> {
+    let snippets = repository.list()?;
+    let mut guard = index.write();
+    guard.clear();
+    for snippet in snippets {
+        if snippet.enabled && !snippet.trigger.trim().is_empty() {
+            guard.insert(snippet.trigger, snippet.replacement);
+        }
+    }
     Ok(())
 }
 
 fn database_path() -> Result<std::path::PathBuf> {
-    let dirs = ProjectDirs::from("com", "aakbarie", "TextCompletion")
+    let dirs = ProjectDirs::from("com", "aakbarie", "Scriblet")
         .ok_or_else(|| anyhow!("unable to resolve local application data directory"))?;
-    Ok(dirs.data_local_dir().join("textcompletion.db"))
+    Ok(dirs.data_local_dir().join("scriblet.db"))
 }
