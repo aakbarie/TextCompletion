@@ -30,6 +30,8 @@ impl SnippetScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snippet {
     pub id: Uuid,
+    pub title: String,
+    pub category: String,
     pub trigger: String,
     pub replacement: String,
     pub scope: SnippetScope,
@@ -42,6 +44,8 @@ impl Snippet {
     pub fn personal(trigger: impl Into<String>, replacement: impl Into<String>) -> Self {
         Self {
             id: Uuid::new_v4(),
+            title: String::new(),
+            category: String::new(),
             trigger: trigger.into(),
             replacement: replacement.into(),
             scope: SnippetScope::Personal,
