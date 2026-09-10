@@ -6,10 +6,12 @@ use slint::{ModelRc, SharedString, VecModel};
 use std::{rc::Rc, sync::Arc};
 use textcompletion::{
     expansion::SharedSnippetIndex,
-    model::{now_epoch_seconds, Binding, Snippet},
+    model::{now_epoch_seconds, Binding, Snippet, SnippetScope},
     runtime::spawn_global_binding,
     storage::{SnippetRepository, SqliteSnippetRepository},
 };
+#[cfg(target_os = "windows")]
+use textcompletion::enterprise::{sync_enterprise, EnterpriseConfig, SqlServerEnterpriseSource};
 use uuid::Uuid;
 
 slint::include_modules!();
@@ -17,12 +19,14 @@ slint::include_modules!();
 fn main() -> Result<()> {
     let db_path = database_path()?;
     let repository = Arc::new(SqliteSnippetRepository::open(&db_path)?);
+    let enterprise_status = try_enterprise_sync(repository.as_ref());
     let index = SharedSnippetIndex::default();
     refresh_index(repository.as_ref(), &index)?;
 
     let _binding_thread = spawn_global_binding(index.clone());
     let ui = AppWindow::new().context("failed to create Scriblet window")?;
     refresh_library(&ui, repository.as_ref(), "", "All")?;
+    ui.set_status_text(enterprise_status.into());
 
     {
         let ui_weak = ui.as_weak();
@@ -38,6 +42,16 @@ fn main() -> Result<()> {
             }
 
             let selected = parse_id(&ui.get_selected_id());
+            if let Some(id) = selected {
+                if repository.list().ok().and_then(|items| items.into_iter().find(|s| s.id == id))
+                    .map(|s| s.scope == SnippetScope::Enterprise)
+                    .unwrap_or(false)
+                {
+                    ui.set_status_text("Enterprise snippets are read-only".into());
+                    return;
+                }
+            }
+
             if !binding_value.is_empty() {
                 match repository.binding_collision(&binding_value, selected) {
                     Ok(true) => {
@@ -137,6 +151,7 @@ fn main() -> Result<()> {
                 .and_then(|items| items.into_iter().find(|b| b.enabled))
                 .map(|b| b.value)
                 .unwrap_or_default();
+            let enterprise = snippet.scope == SnippetScope::Enterprise;
             ui.set_selected_id(snippet.id.to_string().into());
             ui.set_title_text(snippet.title.into());
             ui.set_category_text(snippet.category.into());
@@ -144,7 +159,7 @@ fn main() -> Result<()> {
             ui.set_replacement_text(snippet.replacement.into());
             ui.set_enabled_value(snippet.enabled);
             ui.set_favorite_value(snippet.favorite);
-            ui.set_status_text("Selected".into());
+            ui.set_status_text(if enterprise { "Enterprise · read-only".into() } else { "Selected".into() });
         });
     }
 
@@ -155,6 +170,13 @@ fn main() -> Result<()> {
         ui.on_delete_snippet(move |id| {
             let Some(ui) = ui_weak.upgrade() else { return };
             let Some(id) = parse_id(&id) else { return };
+            if repository.list().ok().and_then(|items| items.into_iter().find(|s| s.id == id))
+                .map(|s| s.scope == SnippetScope::Enterprise)
+                .unwrap_or(false)
+            {
+                ui.set_status_text("Enterprise snippets are read-only".into());
+                return;
+            }
             match repository.delete(id) {
                 Ok(()) => {
                     let _ = refresh_index(repository.as_ref(), &index);
@@ -183,7 +205,7 @@ fn main() -> Result<()> {
             match repository.upsert(&duplicate) {
                 Ok(()) => {
                     let _ = refresh_library(&ui, repository.as_ref(), &ui.get_search_text(), &ui.get_active_filter());
-                    ui.set_status_text("Duplicated without binding".into());
+                    ui.set_status_text("Duplicated as personal snippet without binding".into());
                 }
                 Err(error) => ui.set_status_text(format!("Duplicate failed: {error}").into()),
             }
@@ -209,6 +231,26 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn try_enterprise_sync(repository: &SqliteSnippetRepository) -> String {
+    let Some(config) = EnterpriseConfig::from_env() else {
+        return "Ready · enterprise sync not configured".to_string();
+    };
+    let source = SqlServerEnterpriseSource::new(config);
+    match sync_enterprise(&source, repository) {
+        Ok(report) => format!(
+            "Enterprise synced · {} snippets · {} bindings",
+            report.snippets_upserted, report.bindings_upserted
+        ),
+        Err(error) => format!("Offline · using cached enterprise library ({error})"),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn try_enterprise_sync(_repository: &SqliteSnippetRepository) -> String {
+    "Ready · SQL Server sync is available on Windows".to_string()
+}
+
 fn clear_editor(ui: &AppWindow) {
     ui.set_selected_id("".into());
     ui.set_title_text("".into());
@@ -230,6 +272,8 @@ fn refresh_library(ui: &AppWindow, repository: &SqliteSnippetRepository, query: 
     for snippet in snippets {
         let keep = match filter {
             "Favorites" => snippet.favorite,
+            "Enterprise" => snippet.scope == SnippetScope::Enterprise,
+            "Personal Library" => snippet.scope == SnippetScope::Personal,
             "All" | "" => true,
             category => snippet.category.eq_ignore_ascii_case(category),
         };
@@ -243,7 +287,11 @@ fn refresh_library(ui: &AppWindow, repository: &SqliteSnippetRepository, query: 
         rows.push(SnippetRow {
             id: snippet.id.to_string().into(),
             title: if snippet.title.trim().is_empty() { "Untitled snippet".into() } else { snippet.title.into() },
-            category: snippet.category.into(),
+            category: if snippet.scope == SnippetScope::Enterprise {
+                format!("Enterprise · {}", snippet.category).into()
+            } else {
+                snippet.category.into()
+            },
             binding: binding.into(),
             preview: preview.into(),
             favorite: snippet.favorite,
