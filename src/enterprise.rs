@@ -140,7 +140,7 @@ impl EnterpriseSource for SqlServerEnterpriseSource {
 
         let environment = Environment::new().context("failed to initialize ODBC")?;
         let connection_string = self.config.connection_string();
-        let mut connection = environment
+        let connection = environment
             .connect_with_connection_string(&connection_string, ConnectionOptions::default())
             .context("failed to connect to Scriblet SQL Server using Windows Integrated Authentication")?;
 
@@ -317,8 +317,11 @@ mod tests {
     fn sync_preserves_personal_and_replaces_enterprise_cache() -> Result<()> {
         let dir = tempdir()?;
         let repo = SqliteSnippetRepository::open(dir.path().join("scriblet.db"))?;
-        let personal = Snippet::personal(";mine", "personal");
+        let mut personal = Snippet::personal("", "personal");
+        personal.title = "My personal phrase".into();
+        personal.category = "Personal".into();
         repo.upsert(&personal)?;
+        repo.upsert_binding(&Binding::text(personal.id, ";mine"))?;
 
         let first = record("Approved signature", ";asig");
         let source = FakeSource(Mutex::new(vec![first.clone()]));
