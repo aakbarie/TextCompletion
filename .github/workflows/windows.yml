@@ -1,0 +1,25 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main, rust-mvp]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --all-targets
+      - name: Build release binary
+        run: cargo build --release
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: TextCompletion-windows
+          path: target/release/textcompletion.exe
