@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use anyhow::{anyhow, Context, Result};
 use directories::ProjectDirs;
 use std::sync::Arc;
@@ -16,7 +18,6 @@ fn main() -> Result<()> {
     let index = SharedSnippetIndex::default();
     refresh_index(repository.as_ref(), &index)?;
 
-    // Keep the global binding thread alive for the lifetime of the UI.
     let _binding_thread = spawn_global_binding(index.clone());
 
     let ui = AppWindow::new().context("failed to create Scriblet window")?;
