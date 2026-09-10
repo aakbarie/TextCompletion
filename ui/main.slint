@@ -1,14 +1,14 @@
 import { Button, CheckBox, LineEdit, TextEdit, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
 
 export global ScribletTheme {
-    in property <color> surface: #f7f8fa;
+    in property <color> surface: #f5f7fa;
     in property <color> surface-raised: #ffffff;
-    in property <color> surface-muted: #eef1f4;
+    in property <color> surface-muted: #eef2f6;
     in property <color> text-primary: #17212b;
-    in property <color> text-secondary: #5d6b78;
-    in property <color> border: #d9e0e6;
-    in property <color> accent: #185fa5;
-    in property <color> accent-soft: #e8f1fa;
+    in property <color> text-secondary: #607080;
+    in property <color> border: #d9e0e7;
+    in property <color> accent: #1768b2;
+    in property <color> accent-soft: #e8f2fb;
     in property <color> success: #287a4b;
     in property <color> danger: #a83a3a;
 }
@@ -28,8 +28,9 @@ component NavItem inherits Rectangle {
     in property <bool> selected: false;
     callback activated();
     height: 38px;
-    border-radius: 6px;
+    border-radius: 7px;
     background: selected ? ScribletTheme.accent-soft : transparent;
+
     Text {
         x: 12px;
         vertical-alignment: center;
@@ -38,6 +39,7 @@ component NavItem inherits Rectangle {
         font-weight: selected ? 700 : 500;
         font-size: 14px;
     }
+
     TouchArea { clicked => { root.activated(); } }
 }
 
@@ -45,6 +47,37 @@ component SectionLabel inherits Text {
     color: ScribletTheme.text-secondary;
     font-size: 11px;
     font-weight: 700;
+}
+
+component StatusBadge inherits Rectangle {
+    in property <string> label;
+    width: 300px;
+    height: 32px;
+    border-radius: 16px;
+    background: ScribletTheme.surface-muted;
+    border-width: 1px;
+    border-color: ScribletTheme.border;
+
+    HorizontalBox {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 7px;
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 4px;
+            background: ScribletTheme.accent;
+            vertical-stretch: 0;
+        }
+        Text {
+            text: root.label;
+            color: ScribletTheme.text-secondary;
+            font-size: 11px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
 }
 
 export component AppWindow inherits Window {
@@ -79,20 +112,38 @@ export component AppWindow inherits Window {
         spacing: 0px;
 
         Rectangle {
-            height: 74px;
+            height: 82px;
             background: ScribletTheme.surface-raised;
             HorizontalBox {
-                padding-left: 24px;
-                padding-right: 24px;
-                spacing: 16px;
+                padding-left: 28px;
+                padding-right: 28px;
+                spacing: 18px;
+
                 VerticalBox {
                     alignment: center;
                     spacing: 2px;
-                    Text { text: "Scriblet"; color: ScribletTheme.text-primary; font-size: 24px; font-weight: 700; }
-                    Text { text: "Your little writing helper"; color: ScribletTheme.text-secondary; font-size: 12px; }
+                    Text {
+                        text: "Scriblet";
+                        color: ScribletTheme.text-primary;
+                        font-size: 25px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "Your little writing helper";
+                        color: ScribletTheme.text-secondary;
+                        font-size: 12px;
+                    }
                 }
+
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Text { text: root.library-count-text; color: ScribletTheme.text-secondary; font-size: 12px; vertical-alignment: center; }
+
+                StatusBadge { label: root.status-text; }
+                Text {
+                    text: root.library-count-text;
+                    color: ScribletTheme.text-secondary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
             }
         }
 
@@ -100,75 +151,175 @@ export component AppWindow inherits Window {
 
         HorizontalBox {
             spacing: 0px;
+
             Rectangle {
-                width: 204px;
+                width: 210px;
                 background: ScribletTheme.surface-raised;
                 VerticalBox {
-                    padding: 16px;
+                    padding: 18px;
                     spacing: 7px;
+
                     SectionLabel { text: "LIBRARY"; }
-                    NavItem { label: "All snippets"; selected: root.active-filter == "All"; activated => { root.filter-library("All"); } }
-                    NavItem { label: "★  Favorites"; selected: root.active-filter == "Favorites"; activated => { root.filter-library("Favorites"); } }
-                    Rectangle { height: 8px; background: transparent; }
+                    NavItem {
+                        label: "All snippets";
+                        selected: root.active-filter == "All";
+                        activated => { root.filter-library("All"); }
+                    }
+                    NavItem {
+                        label: "★  Favorites";
+                        selected: root.active-filter == "Favorites";
+                        activated => { root.filter-library("Favorites"); }
+                    }
+
+                    Rectangle { height: 10px; background: transparent; }
                     SectionLabel { text: "CATEGORIES"; }
-                    NavItem { label: "Clinical"; selected: root.active-filter == "Clinical"; activated => { root.filter-library("Clinical"); } }
-                    NavItem { label: "Administrative"; selected: root.active-filter == "Administrative"; activated => { root.filter-library("Administrative"); } }
-                    NavItem { label: "Signatures"; selected: root.active-filter == "Signatures"; activated => { root.filter-library("Signatures"); } }
-                    NavItem { label: "Personal"; selected: root.active-filter == "Personal"; activated => { root.filter-library("Personal"); } }
+                    NavItem {
+                        label: "Clinical";
+                        selected: root.active-filter == "Clinical";
+                        activated => { root.filter-library("Clinical"); }
+                    }
+                    NavItem {
+                        label: "Administrative";
+                        selected: root.active-filter == "Administrative";
+                        activated => { root.filter-library("Administrative"); }
+                    }
+                    NavItem {
+                        label: "Signatures";
+                        selected: root.active-filter == "Signatures";
+                        activated => { root.filter-library("Signatures"); }
+                    }
+                    NavItem {
+                        label: "Personal";
+                        selected: root.active-filter == "Personal";
+                        activated => { root.filter-library("Personal"); }
+                    }
+
                     Rectangle { vertical-stretch: 1; background: transparent; }
-                    Text { text: "Local only · no telemetry"; color: ScribletTheme.text-secondary; font-size: 10px; }
+                    Rectangle { height: 1px; background: ScribletTheme.border; }
+                    Text {
+                        text: "Local first · no telemetry";
+                        color: ScribletTheme.text-secondary;
+                        font-size: 10px;
+                    }
                 }
             }
 
             Rectangle { width: 1px; background: ScribletTheme.border; }
 
             Rectangle {
-                width: 430px;
+                width: 424px;
                 background: ScribletTheme.surface;
                 VerticalBox {
-                    padding: 16px;
+                    padding: 18px;
                     spacing: 12px;
+
                     HorizontalBox {
                         spacing: 8px;
                         LineEdit {
                             text <=> root.search-text;
-                            placeholder-text: "Search phrases, bindings, categories";
+                            placeholder-text: "Search snippets";
                             horizontal-stretch: 1;
                             accepted => { root.search-library(self.text); }
                         }
-                        Button { text: "Search"; clicked => { root.search-library(root.search-text); } }
+                        Button {
+                            text: "Search";
+                            clicked => { root.search-library(root.search-text); }
+                        }
                     }
-                    Button { text: "+ New snippet"; clicked => { root.clear-form(); } }
+
+                    Button {
+                        text: "+  New snippet";
+                        clicked => { root.clear-form(); }
+                    }
+
                     Rectangle {
                         vertical-stretch: 1;
                         background: ScribletTheme.surface-raised;
                         border-width: 1px;
                         border-color: ScribletTheme.border;
-                        border-radius: 8px;
+                        border-radius: 10px;
+
                         ScrollView {
+                            visible: root.library-count-text != "0 snippets";
                             VerticalLayout {
-                                padding: 8px;
-                                spacing: 6px;
+                                padding: 9px;
+                                spacing: 7px;
+
                                 for row in root.snippet-rows : Rectangle {
-                                    height: 92px;
-                                    border-radius: 6px;
+                                    height: 96px;
+                                    border-radius: 8px;
                                     background: root.selected-id == row.id ? ScribletTheme.accent-soft : ScribletTheme.surface-raised;
                                     border-width: 1px;
                                     border-color: root.selected-id == row.id ? ScribletTheme.accent : ScribletTheme.border;
+
                                     VerticalLayout {
-                                        padding: 10px;
-                                        spacing: 3px;
+                                        padding: 11px;
+                                        spacing: 4px;
+
                                         HorizontalLayout {
-                                            Text { text: (row.favorite ? "★ " : "") + row.title; color: ScribletTheme.text-primary; font-size: 14px; font-weight: 700; }
+                                            Text {
+                                                text: (row.favorite ? "★ " : "") + row.title;
+                                                color: ScribletTheme.text-primary;
+                                                font-size: 14px;
+                                                font-weight: 700;
+                                            }
                                             Rectangle { horizontal-stretch: 1; background: transparent; }
-                                            Text { text: row.binding; color: ScribletTheme.accent; font-size: 11px; }
+                                            Rectangle {
+                                                visible: row.binding != "";
+                                                height: 23px;
+                                                border-radius: 5px;
+                                                background: ScribletTheme.accent-soft;
+                                                Text {
+                                                    x: 7px;
+                                                    text: row.binding;
+                                                    color: ScribletTheme.accent;
+                                                    font-size: 11px;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
                                         }
-                                        Text { text: row.category; color: ScribletTheme.text-secondary; font-size: 10px; }
-                                        Text { text: row.preview; color: ScribletTheme.text-secondary; font-size: 11px; overflow: elide; }
+
+                                        Text {
+                                            text: row.category;
+                                            color: ScribletTheme.text-secondary;
+                                            font-size: 10px;
+                                        }
+                                        Text {
+                                            text: row.preview;
+                                            color: ScribletTheme.text-secondary;
+                                            font-size: 11px;
+                                            overflow: elide;
+                                        }
                                     }
+
                                     TouchArea { clicked => { root.select-snippet(row.id); } }
                                 }
                             }
+                        }
+
+                        VerticalBox {
+                            visible: root.library-count-text == "0 snippets";
+                            alignment: center;
+                            spacing: 10px;
+                            Rectangle { vertical-stretch: 1; background: transparent; }
+                            Text {
+                                text: "No snippets yet";
+                                color: ScribletTheme.text-primary;
+                                font-size: 17px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "Create a phrase once, then reuse it anywhere.";
+                                color: ScribletTheme.text-secondary;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                            }
+                            Button {
+                                text: "Create your first snippet";
+                                clicked => { root.clear-form(); }
+                            }
+                            Rectangle { vertical-stretch: 1; background: transparent; }
                         }
                     }
                 }
@@ -180,34 +331,110 @@ export component AppWindow inherits Window {
                 horizontal-stretch: 1;
                 background: ScribletTheme.surface;
                 VerticalBox {
-                    padding: 18px;
-                    spacing: 10px;
+                    padding: 20px;
+                    spacing: 12px;
+
                     HorizontalBox {
-                        Text { text: root.selected-id == "" ? "New snippet" : "Edit snippet"; color: ScribletTheme.text-primary; font-size: 18px; font-weight: 700; }
+                        Text {
+                            text: root.selected-id == "" ? "Create snippet" : "Edit snippet";
+                            color: ScribletTheme.text-primary;
+                            font-size: 20px;
+                            font-weight: 700;
+                        }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Text { text: root.status-text; color: ScribletTheme.text-secondary; font-size: 11px; }
+                        Text {
+                            visible: root.selected-id != "";
+                            text: "Selected";
+                            color: ScribletTheme.text-secondary;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
                     }
-                    SectionLabel { text: "TITLE"; }
-                    LineEdit { text <=> root.title-text; placeholder-text: "Prior authorization approval"; }
-                    SectionLabel { text: "CATEGORY"; }
-                    LineEdit { text <=> root.category-text; placeholder-text: "Clinical"; }
-                    SectionLabel { text: "TEXT BINDING · OPTIONAL"; }
-                    LineEdit { text <=> root.trigger-text; placeholder-text: ";p2p"; }
-                    SectionLabel { text: "PHRASE"; }
-                    TextEdit { text <=> root.replacement-text; vertical-stretch: 1; }
-                    HorizontalBox {
-                        spacing: 8px;
-                        CheckBox { text: "Enabled"; checked <=> root.enabled-value; }
-                        CheckBox { text: "Favorite"; checked <=> root.favorite-value; }
+
+                    Text {
+                        text: root.selected-id == "" ? "Save a reusable phrase and optionally give it a text binding." : "Update the phrase, category, or binding for this snippet.";
+                        color: ScribletTheme.text-secondary;
+                        font-size: 12px;
                     }
-                    HorizontalBox {
-                        spacing: 8px;
-                        Button { text: "Copy"; enabled: root.selected-id != ""; clicked => { root.copy-snippet(root.selected-id); } }
-                        Button { text: "Duplicate"; enabled: root.selected-id != ""; clicked => { root.duplicate-snippet(root.selected-id); } }
-                        Button { text: "Delete"; enabled: root.selected-id != ""; clicked => { root.delete-snippet(root.selected-id); } }
-                        Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Button { text: "Clear"; clicked => { root.clear-form(); } }
-                        Button { text: "Save snippet"; clicked => { root.save-snippet(); } }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: ScribletTheme.surface-raised;
+                        border-width: 1px;
+                        border-color: ScribletTheme.border;
+                        border-radius: 10px;
+
+                        VerticalBox {
+                            padding: 18px;
+                            spacing: 9px;
+
+                            SectionLabel { text: "TITLE"; }
+                            LineEdit {
+                                text <=> root.title-text;
+                                placeholder-text: "Prior authorization approval";
+                            }
+
+                            SectionLabel { text: "CATEGORY"; }
+                            LineEdit {
+                                text <=> root.category-text;
+                                placeholder-text: "Clinical";
+                            }
+
+                            SectionLabel { text: "TEXT BINDING · OPTIONAL"; }
+                            LineEdit {
+                                text <=> root.trigger-text;
+                                placeholder-text: ";p2p";
+                            }
+
+                            Text {
+                                text: "Type the binding followed by space, Tab, or Enter to expand it.";
+                                color: ScribletTheme.text-secondary;
+                                font-size: 10px;
+                            }
+
+                            SectionLabel { text: "PHRASE"; }
+                            TextEdit {
+                                text <=> root.replacement-text;
+                                vertical-stretch: 1;
+                            }
+
+                            Rectangle { height: 1px; background: ScribletTheme.border; }
+
+                            HorizontalBox {
+                                spacing: 16px;
+                                CheckBox { text: "Enabled"; checked <=> root.enabled-value; }
+                                CheckBox { text: "Favorite"; checked <=> root.favorite-value; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                            }
+
+                            HorizontalBox {
+                                spacing: 8px;
+                                Button {
+                                    visible: root.selected-id != "";
+                                    text: "Copy";
+                                    clicked => { root.copy-snippet(root.selected-id); }
+                                }
+                                Button {
+                                    visible: root.selected-id != "";
+                                    text: "Duplicate";
+                                    clicked => { root.duplicate-snippet(root.selected-id); }
+                                }
+                                Button {
+                                    visible: root.selected-id != "";
+                                    text: "Delete";
+                                    clicked => { root.delete-snippet(root.selected-id); }
+                                }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                Button {
+                                    text: "Clear";
+                                    clicked => { root.clear-form(); }
+                                }
+                                Button {
+                                    text: root.selected-id == "" ? "Create snippet" : "Save changes";
+                                    clicked => { root.save-snippet(); }
+                                }
+                            }
+                        }
                     }
                 }
             }
