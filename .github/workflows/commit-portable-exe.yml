@@ -1,4 +1,4 @@
-name: Commit portable Scriblet EXE
+name: Build and publish Scriblet v0.1.0
 
 on:
   push:
@@ -8,15 +8,13 @@ permissions:
   contents: write
 
 jobs:
-  build-and-commit:
+  windows:
     if: github.actor != 'github-actions[bot]'
     runs-on: windows-latest
     env:
       RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: release/scriblet-exe
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -25,18 +23,96 @@ jobs:
         run: cargo test --all-targets --target x86_64-pc-windows-msvc
       - name: Build portable Scriblet.exe
         run: cargo build --release --target x86_64-pc-windows-msvc --bin scriblet
-      - name: Stage executable in repository
+      - name: Stage Windows executable
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force releases/v0.1.0 | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/scriblet.exe releases/v0.1.0/Scriblet.exe
-          $size = (Get-Item releases/v0.1.0/Scriblet.exe).Length
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/scriblet.exe dist/Scriblet.exe
+          $size = (Get-Item dist/Scriblet.exe).Length
           if ($size -lt 100000) { throw "Scriblet.exe is unexpectedly small: $size bytes" }
-      - name: Commit executable to PR branch
-        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scriblet-windows
+          path: dist/Scriblet.exe
+          if-no-files-found: error
+
+  mac-intel:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Regression tests
+        run: cargo test --all-targets --target x86_64-apple-darwin
+      - name: Build Intel macOS Scriblet
+        run: cargo build --release --target x86_64-apple-darwin --bin scriblet
+      - name: Package Scriblet.app
+        shell: bash
         run: |
+          set -euo pipefail
+          APP="dist/Scriblet.app"
+          mkdir -p "$APP/Contents/MacOS"
+          cp target/x86_64-apple-darwin/release/scriblet "$APP/Contents/MacOS/Scriblet"
+          cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          chmod +x "$APP/Contents/MacOS/Scriblet"
+          test -x "$APP/Contents/MacOS/Scriblet"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" dist/Scriblet-macOS-Intel.zip
+          test -s dist/Scriblet-macOS-Intel.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scriblet-macos-intel
+          path: dist/Scriblet-macOS-Intel.zip
+          if-no-files-found: error
+
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    needs: [windows, mac-intel]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/scriblet-exe
+      - uses: actions/download-artifact@v4
+        with:
+          name: scriblet-windows
+          path: release-assets/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: scriblet-macos-intel
+          path: release-assets/mac
+      - name: Commit release binaries to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p releases/v0.1.0
+          cp release-assets/windows/Scriblet.exe releases/v0.1.0/Scriblet.exe
+          cp release-assets/mac/Scriblet-macOS-Intel.zip releases/v0.1.0/Scriblet-macOS-Intel.zip
+          test -s releases/v0.1.0/Scriblet.exe
+          test -s releases/v0.1.0/Scriblet-macOS-Intel.zip
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f releases/v0.1.0/Scriblet.exe
-          git commit -m "release: add portable Scriblet v0.1.0 executable"
+          git add -f releases/v0.1.0/Scriblet.exe releases/v0.1.0/Scriblet-macOS-Intel.zip
+          git commit -m "release: add Scriblet v0.1.0 Windows and Intel Mac binaries"
           git push origin HEAD:release/scriblet-exe
+      - name: Publish GitHub Release v0.1.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.1.0 >/dev/null 2>&1; then
+            gh release upload v0.1.0 \
+              releases/v0.1.0/Scriblet.exe \
+              releases/v0.1.0/Scriblet-macOS-Intel.zip \
+              --clobber
+          else
+            gh release create v0.1.0 \
+              releases/v0.1.0/Scriblet.exe \
+              releases/v0.1.0/Scriblet-macOS-Intel.zip \
+              --target release/scriblet-exe \
+              --title "Scriblet v0.1.0" \
+              --notes "Portable Scriblet v0.1.0 builds for Windows x64 and Intel macOS. Windows is a standalone executable. macOS is packaged as Scriblet.app in a ZIP and requires Accessibility permission for global text expansion."
+          fi
