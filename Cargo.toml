@@ -1,6 +1,6 @@
 [package]
 name = "textcompletion"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 build = "build.rs"
 
@@ -22,6 +22,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 enigo = "0.6.1"
 rdev = { version = "0.5.3", features = ["unstable_grab"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+odbc-api = { version = "29", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
