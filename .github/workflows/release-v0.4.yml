@@ -1,0 +1,109 @@
+name: Release Scriblet v0.4.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v0.4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Regression and UAT tests
+        run: cargo test --all-targets --target x86_64-pc-windows-msvc
+      - name: Build Scriblet.exe
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin scriblet
+      - name: Stage Windows release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/scriblet.exe dist/Scriblet.exe
+          $size = (Get-Item dist/Scriblet.exe).Length
+          if ($size -lt 100000) { throw "Scriblet.exe is unexpectedly small: $size bytes" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Scriblet-Windows-v0.4.0
+          path: dist/Scriblet.exe
+          if-no-files-found: error
+
+  mac-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Regression tests
+        run: cargo test --all-targets --target x86_64-apple-darwin
+      - name: Build Intel macOS Scriblet
+        run: cargo build --release --target x86_64-apple-darwin --bin scriblet
+      - name: Package Scriblet.app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/Scriblet.app/Contents/MacOS
+          cp target/x86_64-apple-darwin/release/scriblet dist/Scriblet.app/Contents/MacOS/scriblet
+          chmod +x dist/Scriblet.app/Contents/MacOS/scriblet
+          cp packaging/macos/Info.plist dist/Scriblet.app/Contents/Info.plist
+          ditto -c -k --sequesterRsrc --keepParent dist/Scriblet.app dist/Scriblet-macOS-Intel.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Scriblet-macOS-Intel-v0.4.0
+          path: dist/Scriblet-macOS-Intel.zip
+          if-no-files-found: error
+
+  release:
+    needs: [windows, mac-intel]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Scriblet-Windows-v0.4.0
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: Scriblet-macOS-Intel-v0.4.0
+          path: release
+      - name: Publish v0.4.0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.4.0
+          target_commitish: main
+          name: Scriblet v0.4.0
+          body: |
+            Scriblet v0.4.0 moves the desktop utility from a local phrase library toward a governed enterprise language layer while preserving fast, offline-first text expansion.
+
+            Highlights:
+            - first-class snippet bindings separated from phrase content
+            - functional local SQLite phrase library with personal snippets
+            - direct SQL Server enterprise-library sync over ODBC
+            - Windows Integrated Authentication with no stored database password
+            - Alliance deployment defaults for RPTPRODDB:1433 / Alliance_RPT with environment-variable overrides
+            - enterprise snippets remain read-only locally while personal snippets remain local
+            - offline operation continues from the local SQLite cache
+            - regression, smoke, and 200-case synthetic MD/RN UAT coverage
+            - migration hardening for legacy trigger data and unbound snippets
+
+            Assets:
+            - Scriblet.exe: portable Windows build
+            - Scriblet-macOS-Intel.zip: Intel macOS app bundle
+
+            Notes:
+            - Windows enterprise sync requires the configured SQL Server ODBC driver and network/database access.
+            - macOS requires Accessibility permission for global text expansion.
+            - macOS build is not code-signed or notarized.
+          files: |
+            release/Scriblet.exe
+            release/Scriblet-macOS-Intel.zip
