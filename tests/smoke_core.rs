@@ -1,7 +1,7 @@
 use tempfile::tempdir;
 use textcompletion::{
     expansion::{ExpansionMatcher, SharedSnippetIndex},
-    model::Snippet,
+    model::{Binding, Snippet},
     storage::{SnippetRepository, SqliteSnippetRepository},
 };
 
@@ -11,8 +11,12 @@ fn smoke_save_load_bind_expand() {
     let repository = SqliteSnippetRepository::open(dir.path().join("scriblet.db"))
         .expect("open SQLite repository");
 
-    let snippet = Snippet::personal(";p2p", "Peer-to-peer review completed.");
+    let mut snippet = Snippet::personal("", "Peer-to-peer review completed.");
+    snippet.title = "Peer-to-peer review".into();
     repository.upsert(&snippet).expect("save snippet");
+    repository
+        .upsert_binding(&Binding::text(snippet.id, ";p2p"))
+        .expect("save binding");
 
     let loaded = repository
         .find_by_trigger(";p2p")
@@ -23,7 +27,7 @@ fn smoke_save_load_bind_expand() {
     let index = SharedSnippetIndex::default();
     index
         .write()
-        .insert(loaded.trigger.clone(), loaded.replacement.clone());
+        .insert(";p2p".into(), loaded.replacement.clone());
 
     let mut matcher = ExpansionMatcher::new(index);
     for ch in ";p2p".chars() {
