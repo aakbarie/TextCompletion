@@ -1,0 +1,67 @@
+import { Button, CheckBox, LineEdit, TextEdit, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "TextCompletion";
+    width: 760px;
+    height: 520px;
+
+    in-out property <string> trigger-text;
+    in-out property <string> replacement-text;
+    in-out property <bool> enabled-value: true;
+    in property <string> status-text: "Ready";
+
+    callback save-snippet();
+    callback clear-form();
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 14px;
+
+        Text {
+            text: "TextCompletion";
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        Text {
+            text: "Fast, local Windows text expansion";
+            color: #666666;
+            font-size: 14px;
+        }
+
+        Text { text: "Trigger"; font-weight: 600; }
+        LineEdit {
+            text <=> root.trigger-text;
+            placeholder-text: ";sig";
+        }
+
+        Text { text: "Replacement"; font-weight: 600; }
+        TextEdit {
+            text <=> root.replacement-text;
+            height: 220px;
+        }
+
+        CheckBox {
+            text: "Enabled";
+            checked <=> root.enabled-value;
+        }
+
+        HorizontalBox {
+            spacing: 10px;
+            Button {
+                text: "Save snippet";
+                clicked => { root.save-snippet(); }
+            }
+            Button {
+                text: "Clear";
+                clicked => { root.clear-form(); }
+            }
+        }
+
+        Text {
+            text: root.status-text;
+            color: #666666;
+            font-size: 12px;
+        }
+    }
+}
