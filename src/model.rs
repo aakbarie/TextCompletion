@@ -27,15 +27,60 @@ impl SnippetScope {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BindingKind {
+    Text,
+    Hotkey,
+}
+
+impl BindingKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Hotkey => "hotkey",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "hotkey" => Self::Hotkey,
+            _ => Self::Text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Binding {
+    pub id: Uuid,
+    pub snippet_id: Uuid,
+    pub kind: BindingKind,
+    pub value: String,
+    pub enabled: bool,
+}
+
+impl Binding {
+    pub fn text(snippet_id: Uuid, value: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            snippet_id,
+            kind: BindingKind::Text,
+            value: value.into(),
+            enabled: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snippet {
     pub id: Uuid,
     pub title: String,
     pub category: String,
+    /// Compatibility field for pre-v0.3 databases. New code stores invocation in `bindings`.
     pub trigger: String,
     pub replacement: String,
     pub scope: SnippetScope,
     pub enabled: bool,
+    pub favorite: bool,
     pub version: i64,
     pub updated_at: i64,
 }
@@ -50,6 +95,7 @@ impl Snippet {
             replacement: replacement.into(),
             scope: SnippetScope::Personal,
             enabled: true,
+            favorite: false,
             version: 1,
             updated_at: now_epoch_seconds(),
         }
