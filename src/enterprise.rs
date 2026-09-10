@@ -9,22 +9,39 @@ pub struct EnterpriseConfig {
     pub server: String,
     pub database: String,
     pub driver: String,
+    pub port: u16,
     pub encrypt: bool,
     pub trust_server_certificate: bool,
 }
 
 impl EnterpriseConfig {
     pub fn from_env() -> Option<Self> {
-        let server = std::env::var("SCRIBLET_SQL_SERVER").ok()?.trim().to_string();
-        let database = std::env::var("SCRIBLET_SQL_DATABASE").ok()?.trim().to_string();
+        let enabled = env_bool("SCRIBLET_ENTERPRISE_ENABLED", true);
+        if !enabled {
+            return None;
+        }
+
+        let server = std::env::var("SCRIBLET_SQL_SERVER")
+            .unwrap_or_else(|_| "RPTPRODDB".to_string())
+            .trim()
+            .to_string();
+        let database = std::env::var("SCRIBLET_SQL_DATABASE")
+            .unwrap_or_else(|_| "Alliance_RPT".to_string())
+            .trim()
+            .to_string();
         if server.is_empty() || database.is_empty() {
             return None;
         }
+
         Some(Self {
             server,
             database,
             driver: std::env::var("SCRIBLET_ODBC_DRIVER")
-                .unwrap_or_else(|_| "ODBC Driver 18 for SQL Server".to_string()),
+                .unwrap_or_else(|_| "SQL Server".to_string()),
+            port: std::env::var("SCRIBLET_SQL_PORT")
+                .ok()
+                .and_then(|value| value.trim().parse::<u16>().ok())
+                .unwrap_or(1433),
             encrypt: env_bool("SCRIBLET_SQL_ENCRYPT", true),
             trust_server_certificate: env_bool("SCRIBLET_SQL_TRUST_SERVER_CERTIFICATE", false),
         })
@@ -32,9 +49,10 @@ impl EnterpriseConfig {
 
     pub fn connection_string(&self) -> String {
         format!(
-            "Driver={{{}}};Server={};Database={};Trusted_Connection=Yes;Encrypt={};TrustServerCertificate={};",
+            "Driver={{{}}};Server={},{};Database={};Trusted_Connection=Yes;Encrypt={};TrustServerCertificate={};",
             self.driver,
             self.server,
+            self.port,
             self.database,
             yes_no(self.encrypt),
             yes_no(self.trust_server_certificate)
@@ -156,7 +174,7 @@ impl EnterpriseSource for SqlServerEnterpriseSource {
 
         let mut records = Vec::new();
         while let Some(mut row) = cursor.next_row()? {
-            let id = parse_uuid(&text_col(&mut row, 1)?, "snippet id")?;
+            let id = parse_uuid(text_col(&mut row, 1)?, "snippet id")?;
             let title = text_col(&mut row, 2)?.unwrap_or_default();
             let category = text_col(&mut row, 3)?.unwrap_or_default();
             let replacement = text_col(&mut row, 4)?.unwrap_or_default();
@@ -276,15 +294,19 @@ mod tests {
     }
 
     #[test]
-    fn connection_string_uses_integrated_auth_and_encryption() {
+    fn connection_string_uses_alliance_defaults_integrated_auth_and_encryption() {
         let config = EnterpriseConfig {
-            server: "SQL01".into(),
-            database: "Scriblet".into(),
-            driver: "ODBC Driver 18 for SQL Server".into(),
+            server: "RPTPRODDB".into(),
+            database: "Alliance_RPT".into(),
+            driver: "SQL Server".into(),
+            port: 1433,
             encrypt: true,
             trust_server_certificate: false,
         };
         let value = config.connection_string();
+        assert!(value.contains("Driver={SQL Server}"));
+        assert!(value.contains("Server=RPTPRODDB,1433"));
+        assert!(value.contains("Database=Alliance_RPT"));
         assert!(value.contains("Trusted_Connection=Yes"));
         assert!(value.contains("Encrypt=Yes"));
         assert!(value.contains("TrustServerCertificate=No"));
