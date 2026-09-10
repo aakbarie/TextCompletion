@@ -27,3 +27,10 @@ tempfile = "3"
 
 [build-dependencies]
 slint-build = "1"
+
+[profile.release]
+opt-level = 1
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = "symbols"
