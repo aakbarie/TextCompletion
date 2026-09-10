@@ -73,13 +73,18 @@ impl SqliteSnippetRepository {
         ensure_column(&conn, "snippets", "category", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "snippets", "favorite", "INTEGER NOT NULL DEFAULT 0")?;
 
-        // One-time compatibility migration: existing pre-v0.3 triggers become text bindings.
+        // Compatibility migration: genuine pre-v0.3 triggers become text bindings.
+        // Internal sentinels used for unbound snippets must never become user-visible bindings.
         conn.execute_batch(
             r#"
+            DELETE FROM bindings
+            WHERE kind = 'text' AND value LIKE '__scriblet_unbound_%';
+
             INSERT OR IGNORE INTO bindings(id, snippet_id, kind, value, enabled)
             SELECT lower(hex(randomblob(16))), id, 'text', trigger, enabled
             FROM snippets
-            WHERE trim(trigger) <> '';
+            WHERE trim(trigger) <> ''
+              AND trigger NOT LIKE '__scriblet_unbound_%';
             "#,
         )?;
 
@@ -124,8 +129,6 @@ impl SnippetRepository for SqliteSnippetRepository {
 
     fn upsert(&self, snippet: &Snippet) -> Result<()> {
         let conn = self.conn.lock();
-        // Legacy trigger remains populated with a private per-snippet sentinel when unbound so old DBs
-        // can retain the original UNIQUE NOT NULL constraint safely.
         let legacy_trigger = if snippet.trigger.trim().is_empty() {
             format!("__scriblet_unbound_{}", snippet.id)
         } else {

@@ -1,4 +1,5 @@
 pub mod binding;
+pub mod enterprise;
 pub mod expansion;
 pub mod model;
 pub mod storage;
