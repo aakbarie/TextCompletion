@@ -1,6 +1,6 @@
 [package]
 name = "textcompletion"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 build = "build.rs"
 
@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+arboard = "3"
 directories = "6"
 parking_lot = "0.12"
 rusqlite = { version = "0.32", features = ["bundled"] }
