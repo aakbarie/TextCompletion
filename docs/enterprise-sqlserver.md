@@ -2,42 +2,58 @@
 
 Scriblet v0.4 can synchronize an enterprise phrase library directly from SQL Server on Windows using ODBC and Windows Integrated Authentication. SQL Server is never queried during text expansion. Approved content is synchronized into the existing local SQLite database and the in-memory binding index continues to serve expansions locally.
 
+## Alliance deployment defaults
+
+The current Alliance reporting environment is configured as:
+
+```text
+Driver={SQL Server}
+Server=RPTPRODDB
+Port=1433
+Database=Alliance_RPT
+Trusted_Connection=Yes
+Encrypt=Yes
+TrustServerCertificate=No
+```
+
+Scriblet uses these as Windows defaults in v0.4. Environment variables can override them for other environments.
+
 ## Client prerequisites
 
 - Windows machine joined to the appropriate domain or otherwise able to authenticate to SQL Server with the logged-in Windows identity
-- Microsoft ODBC Driver 18 for SQL Server installed
-- Network path to the SQL Server instance
+- `SQL Server` ODBC driver installed
+- Network path to `RPTPRODDB:1433`
 - SELECT permission on `dbo.ScribletSnippets` and `dbo.ScribletBindings`
 
 ## Deployment configuration
 
-Set these environment variables for the user or machine running Scriblet:
+Optional overrides:
 
 ```text
-SCRIBLET_SQL_SERVER=SQLPROD01
-SCRIBLET_SQL_DATABASE=Scriblet
-SCRIBLET_ODBC_DRIVER=ODBC Driver 18 for SQL Server
+SCRIBLET_ENTERPRISE_ENABLED=true
+SCRIBLET_SQL_SERVER=RPTPRODDB
+SCRIBLET_SQL_PORT=1433
+SCRIBLET_SQL_DATABASE=Alliance_RPT
+SCRIBLET_ODBC_DRIVER=SQL Server
 SCRIBLET_SQL_ENCRYPT=true
 SCRIBLET_SQL_TRUST_SERVER_CERTIFICATE=false
 ```
 
-Only `SCRIBLET_SQL_SERVER` and `SCRIBLET_SQL_DATABASE` are required. The remaining values default to the secure settings shown above.
-
-The generated connection string uses:
+The generated connection string is equivalent to:
 
 ```text
-Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=No;
+Driver={SQL Server};Server=RPTPRODDB,1433;Database=Alliance_RPT;Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=No;
 ```
 
-Scriblet does not store SQL usernames or passwords.
+Scriblet does not store SQL usernames or passwords. Set `SCRIBLET_ENTERPRISE_ENABLED=false` to disable enterprise synchronization while retaining the local personal library.
 
 ## Server schema
 
-Run `docs/sqlserver-schema.sql` in the target database. Normal Scriblet clients should receive SELECT permission only. Content publishing should be performed through a separate administrative process or controlled database role.
+Run `docs/sqlserver-schema.sql` in `Alliance_RPT`. Normal Scriblet clients should receive SELECT permission only. Content publishing should be performed through a separate administrative process or controlled database role.
 
 ## Offline behavior
 
-At startup Scriblet attempts an enterprise synchronization when SQL Server configuration is present. If SQL Server cannot be reached, the last synchronized enterprise library remains in SQLite and continues to work. Personal snippets are not removed or overwritten during enterprise synchronization.
+At startup Scriblet attempts an enterprise synchronization. If SQL Server cannot be reached, the last synchronized enterprise library remains in SQLite and continues to work. Personal snippets are not removed or overwritten during enterprise synchronization.
 
 ## Privacy boundary
 
