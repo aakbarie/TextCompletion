@@ -1,4 +1,4 @@
-name: Windows build
+name: Windows portable build
 
 on:
   push:
@@ -7,19 +7,36 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  test-and-build:
     runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
-      - name: Test
-        run: cargo test --all-targets
-      - name: Build release binary
-        run: cargo build --release
-      - name: Upload binary
+      - name: Regression and UAT tests
+        run: cargo test --all-targets --target x86_64-pc-windows-msvc
+      - name: Build portable release EXE
+        run: cargo build --release --target x86_64-pc-windows-msvc --bin scriblet
+      - name: Stage portable binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/scriblet.exe dist/Scriblet.exe
+      - name: Smoke check portable EXE exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/Scriblet.exe)) { throw "Scriblet.exe was not produced" }
+          $size = (Get-Item dist/Scriblet.exe).Length
+          if ($size -lt 100000) { throw "Scriblet.exe is unexpectedly small: $size bytes" }
+          Write-Host "Portable Scriblet.exe built successfully: $size bytes"
+      - name: Upload portable Scriblet
         uses: actions/upload-artifact@v4
         with:
-          name: TextCompletion-windows
-          path: target/release/textcompletion.exe
+          name: Scriblet-Windows-Portable
+          path: dist/Scriblet.exe
+          if-no-files-found: error

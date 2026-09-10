@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
+[[bin]]
+name = "scriblet"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 directories = "6"
@@ -13,13 +17,20 @@ serde = { version = "1", features = ["derive"] }
 slint = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-windows = { version = "0.58", features = [
-  "Win32_Foundation",
-  "Win32_System_LibraryLoader",
-  "Win32_System_Threading",
-  "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_UI_WindowsAndMessaging"
-] }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+enigo = "0.6.1"
+rdev = { version = "0.5.3", features = ["unstable_grab"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [build-dependencies]
 slint-build = "1"
+
+[profile.release]
+opt-level = 1
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = "symbols"
