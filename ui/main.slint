@@ -1,67 +1,162 @@
 import { Button, CheckBox, LineEdit, TextEdit, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
+export global ScribletTheme {
+    in property <color> surface: #f7f8fa;
+    in property <color> surface-raised: #ffffff;
+    in property <color> surface-muted: #eef1f4;
+    in property <color> text-primary: #17212b;
+    in property <color> text-secondary: #5d6b78;
+    in property <color> border: #d9e0e6;
+    in property <color> accent: #185fa5;
+    in property <color> accent-soft: #e8f1fa;
+    in property <color> success: #287a4b;
+}
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    height: 38px;
+    border-radius: 6px;
+    background: selected ? ScribletTheme.accent-soft : transparent;
+    Text {
+        x: 12px;
+        vertical-alignment: center;
+        text: root.label;
+        color: selected ? ScribletTheme.accent : ScribletTheme.text-secondary;
+        font-weight: selected ? 700 : 500;
+        font-size: 14px;
+    }
+}
+
+component SectionLabel inherits Text {
+    color: ScribletTheme.text-secondary;
+    font-size: 11px;
+    font-weight: 700;
+}
+
 export component AppWindow inherits Window {
-    title: "TextCompletion";
-    width: 760px;
-    height: 520px;
+    title: "Scriblet";
+    width: 1040px;
+    height: 680px;
+    background: ScribletTheme.surface;
 
     in-out property <string> trigger-text;
     in-out property <string> replacement-text;
     in-out property <bool> enabled-value: true;
+    in-out property <string> search-text;
     in property <string> status-text: "Ready";
+    in property <string> library-count-text: "Local phrase library";
 
     callback save-snippet();
     callback clear-form();
 
     VerticalBox {
-        padding: 24px;
-        spacing: 14px;
+        spacing: 0px;
 
-        Text {
-            text: "TextCompletion";
-            font-size: 28px;
-            font-weight: 700;
+        Rectangle {
+            height: 74px;
+            background: ScribletTheme.surface-raised;
+            HorizontalBox {
+                padding-left: 24px;
+                padding-right: 24px;
+                spacing: 16px;
+                VerticalBox {
+                    alignment: center;
+                    spacing: 2px;
+                    Text { text: "Scriblet"; color: ScribletTheme.text-primary; font-size: 24px; font-weight: 700; }
+                    Text { text: "Your little writing helper"; color: ScribletTheme.text-secondary; font-size: 12px; }
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Rectangle {
+                    width: 92px;
+                    height: 30px;
+                    border-radius: 15px;
+                    background: root.enabled-value ? #e7f4ec : ScribletTheme.surface-muted;
+                    Text {
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        text: root.enabled-value ? "● Enabled" : "○ Paused";
+                        color: root.enabled-value ? ScribletTheme.success : ScribletTheme.text-secondary;
+                        font-size: 12px;
+                        font-weight: 600;
+                    }
+                }
+            }
         }
 
-        Text {
-            text: "Fast, local Windows text expansion";
-            color: #666666;
-            font-size: 14px;
-        }
-
-        Text { text: "Trigger"; font-weight: 600; }
-        LineEdit {
-            text <=> root.trigger-text;
-            placeholder-text: ";sig";
-        }
-
-        Text { text: "Replacement"; font-weight: 600; }
-        TextEdit {
-            text <=> root.replacement-text;
-            height: 220px;
-        }
-
-        CheckBox {
-            text: "Enabled";
-            checked <=> root.enabled-value;
-        }
+        Rectangle { height: 1px; background: ScribletTheme.border; }
 
         HorizontalBox {
-            spacing: 10px;
-            Button {
-                text: "Save snippet";
-                clicked => { root.save-snippet(); }
+            spacing: 0px;
+            Rectangle {
+                width: 214px;
+                background: ScribletTheme.surface-raised;
+                VerticalBox {
+                    padding: 18px;
+                    spacing: 7px;
+                    SectionLabel { text: "LIBRARY"; }
+                    NavItem { label: "All snippets"; selected: true; }
+                    NavItem { label: "★  Favorites"; }
+                    Rectangle { height: 8px; background: transparent; }
+                    SectionLabel { text: "CATEGORIES"; }
+                    NavItem { label: "Clinical"; }
+                    NavItem { label: "Administrative"; }
+                    NavItem { label: "Signatures"; }
+                    NavItem { label: "Personal"; }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                    Text { text: root.library-count-text; color: ScribletTheme.text-secondary; font-size: 11px; }
+                }
             }
-            Button {
-                text: "Clear";
-                clicked => { root.clear-form(); }
-            }
-        }
 
-        Text {
-            text: root.status-text;
-            color: #666666;
-            font-size: 12px;
+            Rectangle { width: 1px; background: ScribletTheme.border; }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                background: ScribletTheme.surface;
+                VerticalBox {
+                    padding: 22px;
+                    spacing: 14px;
+                    HorizontalBox {
+                        spacing: 10px;
+                        LineEdit {
+                            text <=> root.search-text;
+                            placeholder-text: "Search phrases, triggers, or categories";
+                            horizontal-stretch: 1;
+                        }
+                        Button { text: "+ New snippet"; clicked => { root.clear-form(); } }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: ScribletTheme.surface-raised;
+                        border-width: 1px;
+                        border-color: ScribletTheme.border;
+                        border-radius: 8px;
+                        VerticalBox {
+                            padding: 18px;
+                            spacing: 10px;
+                            HorizontalBox {
+                                Text { text: "Snippet editor"; color: ScribletTheme.text-primary; font-size: 18px; font-weight: 700; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                Text { text: root.status-text; color: ScribletTheme.text-secondary; font-size: 11px; }
+                            }
+                            Text { text: "Create or edit reusable language. Bind it to a short trigger for instant insertion anywhere."; color: ScribletTheme.text-secondary; font-size: 12px; }
+                            Rectangle { height: 1px; background: ScribletTheme.border; }
+                            SectionLabel { text: "TRIGGER"; }
+                            LineEdit { text <=> root.trigger-text; placeholder-text: ";sig"; }
+                            SectionLabel { text: "PHRASE"; }
+                            TextEdit { text <=> root.replacement-text; vertical-stretch: 1; }
+                            HorizontalBox {
+                                spacing: 10px;
+                                CheckBox { text: "Enabled"; checked <=> root.enabled-value; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                Button { text: "Clear"; clicked => { root.clear-form(); } }
+                                Button { text: "Save snippet"; clicked => { root.save-snippet(); } }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
