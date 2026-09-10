@@ -17,7 +17,7 @@ fn renders_clipboard_variable() {
 fn removes_cursor_marker_and_reports_position() {
     let rendered = render_template("Decision: {{cursor}} because criteria are met.", None, None);
     assert_eq!(rendered.text, "Decision:  because criteria are met.");
-    assert_eq!(rendered.cursor_offset_from_end, Some(25));
+    assert_eq!(rendered.cursor_offset_from_end, Some(26));
 }
 
 #[test]
