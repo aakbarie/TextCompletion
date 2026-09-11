@@ -21,6 +21,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 #[cfg(target_os = "windows")]
+type ExpansionDispatcher = mpsc::Sender<Expansion>;
+#[cfg(not(target_os = "windows"))]
+type ExpansionDispatcher = ();
+
+#[cfg(target_os = "windows")]
 const SCRIBLET_INPUT_MARKER: usize = 0x5343_5242; // "SCRB"
 
 /// Starts Scriblet's cross-application keyboard binding loop.
@@ -40,7 +45,7 @@ pub fn spawn_global_binding(index: SharedSnippetIndex) -> thread::JoinHandle<()>
     let injecting = Arc::new(AtomicBool::new(false));
 
     #[cfg(target_os = "windows")]
-    let expansion_tx = {
+    let dispatcher: ExpansionDispatcher = {
         let (tx, rx) = mpsc::channel::<Expansion>();
         let worker_injecting = Arc::clone(&injecting);
 
@@ -60,6 +65,9 @@ pub fn spawn_global_binding(index: SharedSnippetIndex) -> thread::JoinHandle<()>
         tx
     };
 
+    #[cfg(not(target_os = "windows"))]
+    let dispatcher: ExpansionDispatcher = ();
+
     thread::spawn(move || {
         let callback = move |event: Event| -> Option<Event> {
             if injecting.load(Ordering::Acquire) {
@@ -77,34 +85,13 @@ pub fn spawn_global_binding(index: SharedSnippetIndex) -> thread::JoinHandle<()>
                     Some(event)
                 }
                 EventType::KeyPress(Key::Space) => {
-                    handle_delimiter(
-                        event,
-                        ' ',
-                        &matcher,
-                        &injecting,
-                        #[cfg(target_os = "windows")]
-                        &expansion_tx,
-                    )
+                    handle_delimiter(event, ' ', &matcher, &injecting, &dispatcher)
                 }
                 EventType::KeyPress(Key::Tab) => {
-                    handle_delimiter(
-                        event,
-                        '\t',
-                        &matcher,
-                        &injecting,
-                        #[cfg(target_os = "windows")]
-                        &expansion_tx,
-                    )
+                    handle_delimiter(event, '\t', &matcher, &injecting, &dispatcher)
                 }
                 EventType::KeyPress(Key::Return) => {
-                    handle_delimiter(
-                        event,
-                        '\n',
-                        &matcher,
-                        &injecting,
-                        #[cfg(target_os = "windows")]
-                        &expansion_tx,
-                    )
+                    handle_delimiter(event, '\n', &matcher, &injecting, &dispatcher)
                 }
                 EventType::KeyPress(_) => {
                     if let Some(name) = event.name.as_deref() {
@@ -134,7 +121,7 @@ fn handle_delimiter(
     delimiter: char,
     matcher: &Arc<Mutex<ExpansionMatcher>>,
     injecting: &Arc<AtomicBool>,
-    #[cfg(target_os = "windows")] expansion_tx: &mpsc::Sender<Expansion>,
+    dispatcher: &ExpansionDispatcher,
 ) -> Option<Event> {
     let expansion = matcher
         .lock()
@@ -151,7 +138,7 @@ fn handle_delimiter(
 
     #[cfg(target_os = "windows")]
     {
-        if expansion_tx.send(expansion).is_err() {
+        if dispatcher.send(expansion).is_err() {
             injecting.store(false, Ordering::Release);
             return Some(event);
         }
@@ -159,6 +146,7 @@ fn handle_delimiter(
 
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = dispatcher;
         let injecting = Arc::clone(injecting);
         thread::spawn(move || {
             let _ = inject_expansion(&expansion);
