@@ -1,4 +1,4 @@
-import { Button, CheckBox, LineEdit, TextEdit, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, TextEdit, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
 
 export global ScribletTheme {
     in property <color> surface: #f5f7fa;
@@ -375,7 +375,14 @@ export component AppWindow inherits Window {
                             }
 
                             SectionLabel { text: "CATEGORY"; }
+                            ComboBox {
+                                visible: root.selected-id == "";
+                                model: ["Clinical", "Administrative", "Signatures", "Personal"];
+                                current-index: root.category-text == "Clinical" ? 0 : root.category-text == "Administrative" ? 1 : root.category-text == "Signatures" ? 2 : 3;
+                                selected(value) => { root.category-text = value; }
+                            }
                             LineEdit {
+                                visible: root.selected-id != "";
                                 text <=> root.category-text;
                                 placeholder-text: "Clinical";
                             }
