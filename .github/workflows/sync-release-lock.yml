@@ -1,0 +1,45 @@
+name: Sync release lockfile
+
+on:
+  push:
+    branches: [release-v0.5.2]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release-v0.5.2
+      - name: Match workspace package version in Cargo.lock
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          manifest = Path("Cargo.toml").read_text()
+          version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
+
+          path = Path("Cargo.lock")
+          lock = path.read_text()
+          pattern = r'(\[\[package\]\]\nname = "textcompletion"\nversion = ")[^"]+("\n)'
+          updated, count = re.subn(pattern, rf'\g<1>{version}\2', lock, count=1)
+          if count != 1:
+              raise SystemExit("Could not find the textcompletion package entry in Cargo.lock")
+          path.write_text(updated)
+      - name: Commit lockfile if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already matches Cargo.toml"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Sync Cargo.lock for v0.5.2"
+          git push origin HEAD:release-v0.5.2
