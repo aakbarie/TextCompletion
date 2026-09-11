@@ -83,9 +83,11 @@ jobs:
           target_commitish: main
           name: Scriblet v0.4.2
           body: |
-            Scriblet v0.4.2 is a focused usability refinement to the v0.4.1 desktop UI.
+            Scriblet v0.4.2 fixes the first live Windows text-expansion defect found during desktop testing and adds a small create-snippet usability improvement.
 
             Highlights:
+            - Windows expansion now submits trigger deletion, replacement text, and the trailing delimiter as one atomic SendInput batch
+            - removes the race that could produce corrupted output such as partial triggers mixed with replacement text
             - Create snippet now uses a category dropdown instead of free text
             - predefined categories: Clinical, Administrative, Signatures, and Personal
             - existing saved snippets retain an editable category field so older or custom categories are preserved
