@@ -134,7 +134,8 @@ fn inject_expansion(expansion: &Expansion) -> Result<(), String> {
         '\t' => push_virtual_key_click(&mut inputs, VK_TAB),
         '\n' => push_virtual_key_click(&mut inputs, VK_RETURN),
         other => {
-            for unit in other.encode_utf16(&mut [0; 2]).iter().copied() {
+            let mut buffer = [0u16; 2];
+            for unit in other.encode_utf16(&mut buffer).iter().copied() {
                 inputs.push(keyboard_input(0, unit, KEYEVENTF_UNICODE));
                 inputs.push(keyboard_input(
                     0,
