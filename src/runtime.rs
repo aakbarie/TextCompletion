@@ -1,4 +1,5 @@
 use crate::expansion::{Expansion, ExpansionMatcher, SharedSnippetIndex};
+#[cfg(not(target_os = "windows"))]
 use enigo::{Direction, Enigo, Key as EnigoKey, Keyboard, Settings};
 use rdev::{grab, Event, EventType, Key};
 use std::sync::{
@@ -6,6 +7,14 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
+
+#[cfg(target_os = "windows")]
+use std::mem::size_of;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    KEYEVENTF_UNICODE, VK_BACK, VK_RETURN, VK_SPACE, VK_TAB,
+};
 
 /// Starts Scriblet's cross-application keyboard binding loop.
 ///
@@ -77,18 +86,112 @@ fn handle_delimiter(
         return Some(event);
     };
 
-    // Suppress only the delimiter that activated a valid Scriblet binding.
-    // The trigger itself has already been typed into the focused application.
+    // The delimiter that activated the binding is suppressed. On Windows the
+    // complete edit is injected synchronously as one SendInput batch so the
+    // user's next physical keystroke cannot be interleaved between trigger
+    // deletion, replacement text, and the trailing delimiter.
     injecting.store(true, Ordering::Release);
-    let injecting = Arc::clone(injecting);
-    thread::spawn(move || {
+
+    #[cfg(target_os = "windows")]
+    {
         let _ = inject_expansion(&expansion);
         injecting.store(false, Ordering::Release);
-    });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let injecting = Arc::clone(injecting);
+        thread::spawn(move || {
+            let _ = inject_expansion(&expansion);
+            injecting.store(false, Ordering::Release);
+        });
+    }
 
     None
 }
 
+#[cfg(target_os = "windows")]
+fn inject_expansion(expansion: &Expansion) -> Result<(), String> {
+    let mut inputs = Vec::with_capacity(
+        expansion.backspaces * 2 + expansion.replacement.encode_utf16().count() * 2 + 2,
+    );
+
+    for _ in 0..expansion.backspaces {
+        push_virtual_key_click(&mut inputs, VK_BACK);
+    }
+
+    for unit in expansion.replacement.encode_utf16() {
+        inputs.push(keyboard_input(0, unit, KEYEVENTF_UNICODE));
+        inputs.push(keyboard_input(
+            0,
+            unit,
+            KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+        ));
+    }
+
+    match expansion.trailing {
+        ' ' => push_virtual_key_click(&mut inputs, VK_SPACE),
+        '\t' => push_virtual_key_click(&mut inputs, VK_TAB),
+        '\n' => push_virtual_key_click(&mut inputs, VK_RETURN),
+        other => {
+            let mut buffer = [0u16; 2];
+            for unit in other.encode_utf16(&mut buffer).iter().copied() {
+                inputs.push(keyboard_input(0, unit, KEYEVENTF_UNICODE));
+                inputs.push(keyboard_input(
+                    0,
+                    unit,
+                    KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                ));
+            }
+        }
+    }
+
+    if inputs.is_empty() {
+        return Ok(());
+    }
+
+    let expected = inputs.len() as u32;
+    let sent = unsafe {
+        SendInput(
+            expected,
+            inputs.as_ptr(),
+            size_of::<INPUT>() as i32,
+        )
+    };
+
+    if sent == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "SendInput submitted {sent} of {expected} events: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn push_virtual_key_click(inputs: &mut Vec<INPUT>, key: u16) {
+    inputs.push(keyboard_input(key, 0, 0));
+    inputs.push(keyboard_input(key, 0, KEYEVENTF_KEYUP));
+}
+
+#[cfg(target_os = "windows")]
+fn keyboard_input(vk: u16, scan: u16, flags: u32) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: scan,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
 fn inject_expansion(expansion: &Expansion) -> Result<(), String> {
     let mut enigo = Enigo::new(&Settings::default()).map_err(|error| error.to_string())?;
 

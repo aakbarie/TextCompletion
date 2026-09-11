@@ -1,6 +1,6 @@
 [package]
 name = "textcompletion"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 build = "build.rs"
 
@@ -25,6 +25,7 @@ rdev = { version = "0.5.3", features = ["unstable_grab"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 odbc-api = { version = "29", default-features = false }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
 [dev-dependencies]
 tempfile = "3"
