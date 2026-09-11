@@ -9,12 +9,19 @@ use std::sync::{
 use std::thread;
 
 #[cfg(target_os = "windows")]
-use std::mem::size_of;
+use std::{
+    mem::size_of,
+    sync::mpsc,
+    time::Duration,
+};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     KEYEVENTF_UNICODE, VK_BACK, VK_RETURN, VK_SPACE, VK_TAB,
 };
+
+#[cfg(target_os = "windows")]
+const SCRIBLET_INPUT_MARKER: usize = 0x5343_5242; // "SCRB"
 
 /// Starts Scriblet's cross-application keyboard binding loop.
 ///
@@ -22,13 +29,43 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 /// persist or log keystrokes. When a delimiter completes a known trigger, the
 /// delimiter is suppressed, the trigger is erased from the focused app, and
 /// the replacement is injected.
+///
+/// On Windows, injection happens on a dedicated worker thread. Calling
+/// SendInput from inside a WH_KEYBOARD_LL callback can cause Scriblet's own
+/// synthetic events to be observed after the callback has already cleared its
+/// guard. Keeping injection off the hook thread lets the hook continue to see
+/// `injecting = true` while Windows dispatches the synthetic events.
 pub fn spawn_global_binding(index: SharedSnippetIndex) -> thread::JoinHandle<()> {
     let matcher = Arc::new(Mutex::new(ExpansionMatcher::new(index)));
     let injecting = Arc::new(AtomicBool::new(false));
 
+    #[cfg(target_os = "windows")]
+    let expansion_tx = {
+        let (tx, rx) = mpsc::channel::<Expansion>();
+        let worker_injecting = Arc::clone(&injecting);
+
+        thread::spawn(move || {
+            while let Ok(expansion) = rx.recv() {
+                let _ = inject_expansion(&expansion);
+
+                // SendInput returns after inserting the batch, but the low-level
+                // hook can still be draining those events. Keep the guard raised
+                // briefly so Scriblet never treats its own replacement text as
+                // fresh physical typing.
+                thread::sleep(Duration::from_millis(25));
+                worker_injecting.store(false, Ordering::Release);
+            }
+        });
+
+        tx
+    };
+
     thread::spawn(move || {
         let callback = move |event: Event| -> Option<Event> {
             if injecting.load(Ordering::Acquire) {
+                // Synthetic Scriblet input and any extremely fast physical
+                // typing during the replacement are passed through untouched,
+                // but are deliberately excluded from the rolling matcher.
                 return Some(event);
             }
 
@@ -40,13 +77,34 @@ pub fn spawn_global_binding(index: SharedSnippetIndex) -> thread::JoinHandle<()>
                     Some(event)
                 }
                 EventType::KeyPress(Key::Space) => {
-                    handle_delimiter(event, ' ', &matcher, &injecting)
+                    handle_delimiter(
+                        event,
+                        ' ',
+                        &matcher,
+                        &injecting,
+                        #[cfg(target_os = "windows")]
+                        &expansion_tx,
+                    )
                 }
                 EventType::KeyPress(Key::Tab) => {
-                    handle_delimiter(event, '\t', &matcher, &injecting)
+                    handle_delimiter(
+                        event,
+                        '\t',
+                        &matcher,
+                        &injecting,
+                        #[cfg(target_os = "windows")]
+                        &expansion_tx,
+                    )
                 }
                 EventType::KeyPress(Key::Return) => {
-                    handle_delimiter(event, '\n', &matcher, &injecting)
+                    handle_delimiter(
+                        event,
+                        '\n',
+                        &matcher,
+                        &injecting,
+                        #[cfg(target_os = "windows")]
+                        &expansion_tx,
+                    )
                 }
                 EventType::KeyPress(_) => {
                     if let Some(name) = event.name.as_deref() {
@@ -76,6 +134,7 @@ fn handle_delimiter(
     delimiter: char,
     matcher: &Arc<Mutex<ExpansionMatcher>>,
     injecting: &Arc<AtomicBool>,
+    #[cfg(target_os = "windows")] expansion_tx: &mpsc::Sender<Expansion>,
 ) -> Option<Event> {
     let expansion = matcher
         .lock()
@@ -86,16 +145,16 @@ fn handle_delimiter(
         return Some(event);
     };
 
-    // The delimiter that activated the binding is suppressed. On Windows the
-    // complete edit is injected synchronously as one SendInput batch so the
-    // user's next physical keystroke cannot be interleaved between trigger
-    // deletion, replacement text, and the trailing delimiter.
+    // Suppress only the delimiter that activated a valid binding. The trigger
+    // itself has already been typed into the focused application.
     injecting.store(true, Ordering::Release);
 
     #[cfg(target_os = "windows")]
     {
-        let _ = inject_expansion(&expansion);
-        injecting.store(false, Ordering::Release);
+        if expansion_tx.send(expansion).is_err() {
+            injecting.store(false, Ordering::Release);
+            return Some(event);
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -112,6 +171,27 @@ fn handle_delimiter(
 
 #[cfg(target_os = "windows")]
 fn inject_expansion(expansion: &Expansion) -> Result<(), String> {
+    let inputs = build_expansion_inputs(expansion);
+
+    if inputs.is_empty() {
+        return Ok(());
+    }
+
+    let expected = inputs.len() as u32;
+    let sent = unsafe { SendInput(expected, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+
+    if sent == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "SendInput submitted {sent} of {expected} events: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn build_expansion_inputs(expansion: &Expansion) -> Vec<INPUT> {
     let mut inputs = Vec::with_capacity(
         expansion.backspaces * 2 + expansion.replacement.encode_utf16().count() * 2 + 2,
     );
@@ -146,27 +226,7 @@ fn inject_expansion(expansion: &Expansion) -> Result<(), String> {
         }
     }
 
-    if inputs.is_empty() {
-        return Ok(());
-    }
-
-    let expected = inputs.len() as u32;
-    let sent = unsafe {
-        SendInput(
-            expected,
-            inputs.as_ptr(),
-            size_of::<INPUT>() as i32,
-        )
-    };
-
-    if sent == expected {
-        Ok(())
-    } else {
-        Err(format!(
-            "SendInput submitted {sent} of {expected} events: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
+    inputs
 }
 
 #[cfg(target_os = "windows")]
@@ -185,7 +245,7 @@ fn keyboard_input(vk: u16, scan: u16, flags: u32) -> INPUT {
                 wScan: scan,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: SCRIBLET_INPUT_MARKER,
             },
         },
     }
@@ -214,4 +274,26 @@ fn inject_expansion(expansion: &Expansion) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn expansion_batch_contains_complete_edit() {
+        let expansion = Expansion {
+            backspaces: 4,
+            replacement: "testing scriblet".into(),
+            trailing: ' ',
+        };
+
+        let inputs = build_expansion_inputs(&expansion);
+        let replacement_units = expansion.replacement.encode_utf16().count();
+
+        assert_eq!(
+            inputs.len(),
+            expansion.backspaces * 2 + replacement_units * 2 + 2
+        );
+    }
 }
