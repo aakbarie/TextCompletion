@@ -1,4 +1,4 @@
--- Scriblet v0.4 enterprise library schema
+-- Scriblet enterprise library schema (v0.4+)
 -- SQL Server is the source of truth. Clients receive read-only access to these tables.
 
 CREATE TABLE dbo.ScribletSnippets (
@@ -15,6 +15,7 @@ GO
 CREATE TABLE dbo.ScribletBindings (
     id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ScribletBindings PRIMARY KEY,
     snippet_id UNIQUEIDENTIFIER NOT NULL,
+    -- Only 'text' is supported by clients today; the column is reserved for future kinds.
     kind NVARCHAR(20) NOT NULL CONSTRAINT DF_ScribletBindings_kind DEFAULT (N'text'),
     value NVARCHAR(255) NOT NULL,
     enabled BIT NOT NULL CONSTRAINT DF_ScribletBindings_enabled DEFAULT (1),
