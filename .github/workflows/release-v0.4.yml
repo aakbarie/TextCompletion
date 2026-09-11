@@ -1,4 +1,4 @@
-name: Release Scriblet v0.4.1
+name: Release Scriblet v0.4.2
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
           if ($size -lt 100000) { throw "Scriblet.exe is unexpectedly small: $size bytes" }
       - uses: actions/upload-artifact@v4
         with:
-          name: Scriblet-Windows-v0.4.1
+          name: Scriblet-Windows-v0.4.2
           path: dist/Scriblet.exe
           if-no-files-found: error
 
@@ -60,7 +60,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent dist/Scriblet.app dist/Scriblet-macOS-Intel.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: Scriblet-macOS-Intel-v0.4.1
+          name: Scriblet-macOS-Intel-v0.4.2
           path: dist/Scriblet-macOS-Intel.zip
           if-no-files-found: error
 
@@ -70,29 +70,26 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Scriblet-Windows-v0.4.1
+          name: Scriblet-Windows-v0.4.2
           path: release
       - uses: actions/download-artifact@v4
         with:
-          name: Scriblet-macOS-Intel-v0.4.1
+          name: Scriblet-macOS-Intel-v0.4.2
           path: release
-      - name: Publish v0.4.1
+      - name: Publish v0.4.2
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.1
+          tag_name: v0.4.2
           target_commitish: main
-          name: Scriblet v0.4.1
+          name: Scriblet v0.4.2
           body: |
-            Scriblet v0.4.1 is a focused visual and usability update to the v0.4 enterprise-capable desktop build.
+            Scriblet v0.4.2 is a focused usability refinement to the v0.4.1 desktop UI.
 
             Highlights:
-            - redesigned library-first Windows interface based on live desktop testing
-            - compact connection/status badge so SQL Server errors no longer collide with the editor
-            - deliberate empty-library state instead of a blank center pane
-            - tighter spacing, clearer hierarchy, and improved snippet-card treatment
-            - contextual Copy, Duplicate, and Delete actions only when a snippet is selected
-            - clearer Create snippet / Save changes actions and binding guidance
-            - retains the v0.4 SQL Server enterprise-library sync, Windows Integrated Authentication, offline SQLite cache, first-class bindings, and personal/enterprise separation
+            - Create snippet now uses a category dropdown instead of free text
+            - predefined categories: Clinical, Administrative, Signatures, and Personal
+            - existing saved snippets retain an editable category field so older or custom categories are preserved
+            - retains the v0.4.1 library-first visual polish and v0.4 SQL Server, SQLite, binding, and offline-cache behavior
             - regression, smoke, and 200-case synthetic MD/RN UAT coverage
 
             Assets:
