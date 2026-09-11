@@ -123,3 +123,57 @@ fn unreadable_rows_are_skipped_rather_than_failing_the_library() -> Result<()> {
     assert_eq!(list[0].replacement, "Good");
     Ok(())
 }
+
+#[test]
+fn concurrent_write_is_isolated_from_a_rolling_back_transaction() -> Result<()> {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+
+    let dir = tempdir()?;
+    let repo = Arc::new(SqliteSnippetRepository::open(dir.path().join("iso.db"))?);
+    let barrier = Arc::new(Barrier::new(2));
+
+    let sync_snippet = Snippet::personal("", "Enterprise row that will be rolled back");
+    let sync_id = sync_snippet.id;
+    let personal = Snippet::personal("", "Personal save during sync");
+    let personal_id = personal.id;
+
+    // Thread A: a long transaction that fails after the other thread has tried to write.
+    let repo_a = Arc::clone(&repo);
+    let barrier_a = Arc::clone(&barrier);
+    let sync_thread = thread::spawn(move || {
+        repo_a.transaction(&mut || {
+            repo_a.upsert(&sync_snippet)?;
+            barrier_a.wait();
+            // Give thread B time to attempt its write while we still hold the transaction.
+            thread::sleep(Duration::from_millis(250));
+            Err(anyhow!("simulated sync failure"))
+        })
+    });
+
+    // Thread B: an ordinary save that must not be swallowed by A's rollback.
+    let repo_b = Arc::clone(&repo);
+    let barrier_b = Arc::clone(&barrier);
+    let save_thread = thread::spawn(move || {
+        barrier_b.wait();
+        repo_b.transaction(&mut || {
+            repo_b.upsert(&personal)?;
+            repo_b.upsert_binding(&Binding::text(personal.id, ";mine"))
+        })
+    });
+
+    assert!(sync_thread.join().unwrap().is_err());
+    save_thread.join().unwrap()?;
+
+    assert!(
+        repo.get(sync_id)?.is_none(),
+        "rolled-back row must not persist"
+    );
+    assert!(
+        repo.get(personal_id)?.is_some(),
+        "concurrent save must survive"
+    );
+    assert!(repo.find_by_trigger(";mine")?.is_some());
+    Ok(())
+}

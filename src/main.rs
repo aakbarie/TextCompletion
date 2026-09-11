@@ -15,6 +15,7 @@ use textcompletion::{
     autostart,
     enterprise::EnterpriseConfig,
     expansion::SharedSnippetIndex,
+    instance,
     model::SnippetScope,
     runtime::{spawn_global_binding, PauseFlag, RuntimeStatus},
     storage::{SnippetRepository, SqliteSnippetRepository},
@@ -37,6 +38,29 @@ fn main() {
     };
     init_logging(&dirs);
     log::info!("Scriblet {APP_VERSION} starting");
+
+    // One process, one keyboard hook. A second launch is told to use the tray.
+    let _instance = match instance::acquire(dirs.data_local_dir()) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            platform::inform(
+                "Scriblet is already running",
+                "Open it from the tray icon. Only one Scriblet can run at a time so triggers are not expanded twice.",
+            );
+            return;
+        }
+        Err(error) => {
+            log::warn!("single-instance lock unavailable, continuing: {error:#}");
+            match run(&dirs) {
+                Ok(()) => return,
+                Err(error) => {
+                    log::error!("{error:#}");
+                    platform::fatal(&format!("{error:#}"));
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
 
     if let Err(error) = run(&dirs) {
         log::error!("{error:#}");
@@ -150,9 +174,9 @@ fn wire_editor(ui: &AppWindow, repository: &Repo, index: &SharedSnippetIndex) {
                 Ok(snippet) => {
                     ui.set_selected_id(snippet.id.to_string().into());
                     ui.set_title_text(snippet.title.into());
-                    ui.set_category_text(snippet.category.into());
                     ui.set_confirm_delete(false);
                     report(&ui, &repository, &index, "Saved");
+                    set_category(&ui, &snippet.category);
                 }
                 Err(error) => ui.set_status_text(error.to_string().into()),
             }
@@ -186,7 +210,7 @@ fn wire_editor(ui: &AppWindow, repository: &Repo, index: &SharedSnippetIndex) {
             let enterprise = snippet.is_enterprise();
             ui.set_selected_id(snippet.id.to_string().into());
             ui.set_title_text(snippet.title.into());
-            ui.set_category_text(snippet.category.into());
+            set_category(&ui, &snippet.category);
             ui.set_trigger_text(binding.into());
             ui.set_replacement_text(snippet.replacement.into());
             ui.set_enabled_value(snippet.enabled);
@@ -464,10 +488,23 @@ fn refresh_all(ui: &AppWindow, repository: &Repo) -> Result<()> {
     )
 }
 
+/// Points the category dropdown at `category`, or clears the selection for a
+/// custom category. Slint's ComboBox only follows `current-index`.
+fn set_category(ui: &AppWindow, category: &str) {
+    use slint::Model;
+    let index = ui
+        .get_categories()
+        .iter()
+        .position(|c| c.as_str().eq_ignore_ascii_case(category))
+        .map_or(-1, |i| i as i32);
+    ui.set_category_text(category.into());
+    ui.set_category_index(index);
+}
+
 fn clear_editor(ui: &AppWindow) {
     ui.set_selected_id("".into());
     ui.set_title_text("".into());
-    ui.set_category_text(app::DEFAULT_CATEGORY.into());
+    set_category(ui, app::DEFAULT_CATEGORY);
     ui.set_trigger_text("".into());
     ui.set_replacement_text("".into());
     ui.set_enabled_value(true);

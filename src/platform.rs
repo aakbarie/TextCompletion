@@ -6,18 +6,33 @@ use std::path::PathBuf;
 /// exists, because the Windows build has no console to print to.
 pub fn fatal(message: &str) {
     log::error!("fatal: {message}");
+    show_dialog("Scriblet could not start", message, true);
+}
+
+/// Shows a blocking informational message before the window exists.
+pub fn inform(title: &str, message: &str) {
+    log::info!("{title}: {message}");
+    show_dialog(title, message, false);
+}
+
+#[allow(unused_variables)]
+fn show_dialog(title: &str, message: &str, error: bool) {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Error)
-            .set_title("Scriblet could not start")
+            .set_level(if error {
+                rfd::MessageLevel::Error
+            } else {
+                rfd::MessageLevel::Info
+            })
+            .set_title(title)
             .set_description(message)
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        eprintln!("Scriblet could not start: {message}");
+        eprintln!("{title}: {message}");
     }
 }
 

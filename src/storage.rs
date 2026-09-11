@@ -1,7 +1,8 @@
 use crate::model::{Binding, BindingKind, Snippet, SnippetScope};
 use anyhow::{Context, Result};
-use parking_lot::Mutex;
+use parking_lot::ReentrantMutex;
 use rusqlite::{params, Connection};
+use std::cell::RefCell;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -32,8 +33,13 @@ pub trait SnippetRepository: Send + Sync {
     fn transaction(&self, work: &mut dyn FnMut() -> Result<()>) -> Result<()>;
 }
 
+/// The connection sits behind a reentrant mutex so that a transaction can
+/// hold it for the whole unit of work while still calling other repository
+/// methods on the same thread. Every other thread blocks until the
+/// transaction commits or rolls back, which is what keeps a personal save from
+/// landing inside a background sync's transaction.
 pub struct SqliteSnippetRepository {
-    conn: Mutex<Connection>,
+    conn: ReentrantMutex<RefCell<Connection>>,
 }
 
 impl SqliteSnippetRepository {
@@ -118,12 +124,13 @@ impl SqliteSnippetRepository {
         }
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: ReentrantMutex::new(RefCell::new(conn)),
         })
     }
 
     pub fn schema_version(&self) -> Result<i64> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
     }
 }
@@ -181,7 +188,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn upsert(&self, snippet: &Snippet) -> Result<()> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         let legacy_trigger = if snippet.trigger.trim().is_empty() {
             format!("{UNBOUND_SENTINEL_PREFIX}{}", snippet.id)
         } else {
@@ -219,7 +227,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn delete(&self, id: Uuid) -> Result<()> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         conn.execute(
             "DELETE FROM snippets WHERE id = ?1",
             params![id.to_string()],
@@ -228,7 +237,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn list_categories(&self) -> Result<Vec<String>> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         let mut stmt = conn.prepare(
             "SELECT DISTINCT category FROM snippets WHERE trim(category) <> '' ORDER BY category COLLATE NOCASE",
         )?;
@@ -238,7 +248,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn list_bindings(&self) -> Result<Vec<Binding>> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         let mut stmt = conn.prepare(
             "SELECT id, snippet_id, kind, value, enabled FROM bindings ORDER BY kind, value COLLATE NOCASE",
         )?;
@@ -247,7 +258,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn bindings_for(&self, snippet_id: Uuid) -> Result<Vec<Binding>> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         let mut stmt = conn.prepare(
             "SELECT id, snippet_id, kind, value, enabled FROM bindings WHERE snippet_id = ?1 ORDER BY kind, value COLLATE NOCASE",
         )?;
@@ -256,7 +268,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn upsert_binding(&self, binding: &Binding) -> Result<()> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         conn.execute(
             "INSERT INTO bindings(id, snippet_id, kind, value, enabled) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET snippet_id=excluded.snippet_id, kind=excluded.kind, value=excluded.value, enabled=excluded.enabled",
@@ -273,7 +286,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn delete_bindings_for(&self, snippet_id: Uuid) -> Result<()> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         conn.execute(
             "DELETE FROM bindings WHERE snippet_id = ?1",
             params![snippet_id.to_string()],
@@ -282,7 +296,8 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn binding_collision(&self, value: &str, excluding_snippet: Option<Uuid>) -> Result<bool> {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         let count: i64 = match excluding_snippet {
             Some(id) => conn.query_row(
                 "SELECT COUNT(*) FROM bindings WHERE kind='text' AND value=?1 AND snippet_id<>?2",
@@ -299,26 +314,24 @@ impl SnippetRepository for SqliteSnippetRepository {
     }
 
     fn transaction(&self, work: &mut dyn FnMut() -> Result<()>) -> Result<()> {
-        {
-            let conn = self.conn.lock();
-            if !conn.is_autocommit() {
-                // Already inside a transaction: join it.
-                drop(conn);
-                return work();
-            }
-            conn.execute_batch("BEGIN IMMEDIATE")?;
+        // Held for the entire transaction. The mutex is reentrant, so `work`
+        // can call any repository method; other threads wait at this line.
+        let guard = self.conn.lock();
+
+        if !guard.borrow().is_autocommit() {
+            // Already inside this thread's transaction: join it.
+            return work();
         }
 
+        guard.borrow().execute_batch("BEGIN IMMEDIATE")?;
         let outcome = work();
-
-        let conn = self.conn.lock();
         match outcome {
             Ok(()) => {
-                conn.execute_batch("COMMIT")?;
+                guard.borrow().execute_batch("COMMIT")?;
                 Ok(())
             }
             Err(error) => {
-                if let Err(rollback_error) = conn.execute_batch("ROLLBACK") {
+                if let Err(rollback_error) = guard.borrow().execute_batch("ROLLBACK") {
                     log::error!("rollback failed after {error}: {rollback_error}");
                 }
                 Err(error)
@@ -332,7 +345,8 @@ impl SqliteSnippetRepository {
     where
         P: rusqlite::Params,
     {
-        let conn = self.conn.lock();
+        let guard = self.conn.lock();
+        let conn = guard.borrow();
         let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map(params, row_to_snippet)?;
         Ok(collect_valid(rows, "snippet"))

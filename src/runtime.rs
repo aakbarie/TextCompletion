@@ -9,7 +9,7 @@
 
 use crate::expansion::{Expansion, SharedSnippetIndex};
 use crate::template::{cursor_left_presses, render_now, RenderedTemplate};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -54,6 +54,74 @@ pub fn spawn_global_binding(
     imp::spawn(index, paused, status)
 }
 
+/// Tracks one expansion from the moment the hook accepts it until the worker
+/// has typed it (or given up). Keystrokes and clicks that arrive in between
+/// are counted so the worker can abort instead of interleaving with them.
+#[derive(Debug, Default)]
+pub struct PendingExpansion {
+    in_flight: AtomicBool,
+    interruptions: AtomicUsize,
+}
+
+impl PendingExpansion {
+    pub fn begin(&self) {
+        self.interruptions.store(0, Ordering::SeqCst);
+        self.in_flight.store(true, Ordering::SeqCst);
+    }
+
+    pub fn in_flight(&self) -> bool {
+        self.in_flight.load(Ordering::SeqCst)
+    }
+
+    /// Records user input that arrived while an expansion was pending.
+    /// Returns `true` if an expansion was in flight.
+    pub fn note_interruption(&self) -> bool {
+        if self.in_flight() {
+            self.interruptions.fetch_add(1, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn interruptions(&self) -> usize {
+        self.interruptions.load(Ordering::SeqCst)
+    }
+
+    pub fn finish(&self) {
+        self.in_flight.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Why a queued expansion was dropped rather than typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbortReason {
+    /// The user typed or clicked before the replacement could be sent.
+    Interrupted(usize),
+    /// The foreground window or focused control changed since the trigger.
+    TargetChanged,
+}
+
+impl std::fmt::Display for AbortReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Interrupted(n) => write!(f, "{n} keystroke(s) arrived before the replacement"),
+            Self::TargetChanged => write!(f, "the target window changed"),
+        }
+    }
+}
+
+/// Decides whether a queued expansion may still be typed safely.
+pub fn may_inject(interruptions: usize, target_unchanged: bool) -> Result<(), AbortReason> {
+    if !target_unchanged {
+        return Err(AbortReason::TargetChanged);
+    }
+    if interruptions > 0 {
+        return Err(AbortReason::Interrupted(interruptions));
+    }
+    Ok(())
+}
+
 /// Everything the platform layer needs to type one expansion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InjectionPlan {
@@ -93,8 +161,10 @@ mod imp {
         VK_SHIFT, VK_SPACE, VK_TAB,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
-        WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW,
+        GetWindowThreadProcessId, SetWindowsHookExW, GUITHREADINFO, KBDLLHOOKSTRUCT,
+        LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+        WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
     const SCRIBLET_INPUT_MARKER: usize = 0x5343_5242; // "SCRB"
@@ -145,29 +215,78 @@ mod imp {
         }
     }
 
+    /// Where the trigger was typed: foreground window and focused control.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Target {
+        window: isize,
+        focus: isize,
+    }
+
+    fn current_target() -> Target {
+        unsafe {
+            let window = GetForegroundWindow();
+            let thread = GetWindowThreadProcessId(window, null_mut());
+            let mut info: GUITHREADINFO = std::mem::zeroed();
+            info.cbSize = size_of::<GUITHREADINFO>() as u32;
+            let focus = if GetGUIThreadInfo(thread, &mut info) != 0 {
+                info.hwndFocus as isize
+            } else {
+                0
+            };
+            Target {
+                window: window as isize,
+                focus,
+            }
+        }
+    }
+
+    struct QueuedExpansion {
+        expansion: Expansion,
+        target: Target,
+    }
+
     struct HookState {
         matcher: ExpansionMatcher,
-        expansion_tx: mpsc::Sender<Expansion>,
+        expansion_tx: mpsc::Sender<QueuedExpansion>,
         modifiers: Modifiers,
         suppress_keyup: Option<u32>,
         paused: PauseFlag,
+        pending: Arc<PendingExpansion>,
+        last_window: isize,
     }
 
     static HOOK_STATE: OnceLock<Mutex<HookState>> = OnceLock::new();
+
+    fn with_state(f: impl FnOnce(&mut HookState)) {
+        if let Some(state) = HOOK_STATE.get() {
+            if let Ok(mut state) = state.lock() {
+                f(&mut state);
+            }
+        }
+    }
 
     pub fn spawn(
         index: SharedSnippetIndex,
         paused: PauseFlag,
         status: StatusCallback,
     ) -> thread::JoinHandle<()> {
-        let (expansion_tx, expansion_rx) = mpsc::channel::<Expansion>();
+        let (expansion_tx, expansion_rx) = mpsc::channel::<QueuedExpansion>();
+        let pending = Arc::new(PendingExpansion::default());
 
+        let worker_pending = Arc::clone(&pending);
         thread::spawn(move || {
-            while let Ok(expansion) = expansion_rx.recv() {
-                let plan = plan_injection(&expansion);
-                if let Err(error) = inject(&plan) {
-                    log::warn!("expansion injection failed: {error}");
+            while let Ok(queued) = expansion_rx.recv() {
+                let plan = plan_injection(&queued.expansion);
+                let same_target = current_target() == queued.target;
+                match may_inject(worker_pending.interruptions(), same_target) {
+                    Ok(()) => {
+                        if let Err(error) = inject(&plan) {
+                            log::warn!("expansion injection failed: {error}");
+                        }
+                    }
+                    Err(reason) => log::warn!("expansion skipped: {reason}"),
                 }
+                worker_pending.finish();
             }
         });
 
@@ -183,6 +302,8 @@ mod imp {
                 modifiers,
                 suppress_keyup: None,
                 paused,
+                pending,
+                last_window: 0,
             }))
             .is_err()
         {
@@ -198,6 +319,13 @@ mod imp {
                 return;
             }
             log::info!("low-level keyboard hook installed");
+            let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), null_mut(), 0);
+            if mouse_hook.is_null() {
+                log::warn!(
+                    "mouse hook unavailable, clicks will not reset triggers: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
             status(RuntimeStatus::Active);
 
             let mut message: MSG = std::mem::zeroed();
@@ -237,6 +365,23 @@ mod imp {
                 state.matcher.reset();
             }
             return CallNextHookEx(null_mut(), code, wparam, lparam);
+        }
+
+        if down {
+            // Typing into a different window than the last key went to means
+            // the partial trigger no longer describes what is on screen.
+            let window = GetForegroundWindow() as isize;
+            if window != state.last_window {
+                state.last_window = window;
+                state.matcher.reset();
+            }
+
+            // Anything typed while a replacement is still in flight makes
+            // that replacement unsafe; the worker drops it.
+            if state.pending.note_interruption() {
+                state.matcher.reset();
+                return CallNextHookEx(null_mut(), code, wparam, lparam);
+            }
         }
 
         if state.paused.load(Ordering::Relaxed) {
@@ -279,10 +424,16 @@ mod imp {
 
         if let Some(delimiter) = delimiter {
             if let Some(expansion) = state.matcher.feed_char(delimiter) {
-                if state.expansion_tx.send(expansion).is_ok() {
+                let queued = QueuedExpansion {
+                    expansion,
+                    target: current_target(),
+                };
+                state.pending.begin();
+                if state.expansion_tx.send(queued).is_ok() {
                     state.suppress_keyup = Some(vk);
                     return 1;
                 }
+                state.pending.finish();
             }
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
@@ -296,6 +447,21 @@ mod imp {
             state.matcher.reset();
         }
 
+        CallNextHookEx(null_mut(), code, wparam, lparam)
+    }
+
+    /// Mouse clicks move the caret, so a partially typed trigger is stale and a
+    /// pending replacement would land in the wrong place.
+    unsafe extern "system" fn mouse_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+        if code >= 0 {
+            let message = wparam as u32;
+            if message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN {
+                with_state(|state| {
+                    state.matcher.reset();
+                    state.pending.note_interruption();
+                });
+            }
+        }
         CallNextHookEx(null_mut(), code, wparam, lparam)
     }
 
@@ -561,6 +727,7 @@ mod imp {
         let matcher = Arc::new(Mutex::new(ExpansionMatcher::new(index)));
         let injecting = Arc::new(AtomicBool::new(false));
         let modifiers = Arc::new(Mutex::new(Modifiers::default()));
+        let pending = Arc::new(PendingExpansion::default());
 
         thread::spawn(move || {
             if !macos_accessibility_client::accessibility::application_is_trusted_with_prompt() {
@@ -582,6 +749,15 @@ mod imp {
                 let (key, down) = match event.event_type {
                     EventType::KeyPress(key) => (key, true),
                     EventType::KeyRelease(key) => (key, false),
+                    EventType::ButtonPress(_) => {
+                        // A click moves the caret: the partial trigger is stale
+                        // and a pending replacement would land in the wrong place.
+                        pending.note_interruption();
+                        if let Ok(mut matcher) = matcher.lock() {
+                            matcher.reset();
+                        }
+                        return Some(event);
+                    }
                     _ => return Some(event),
                 };
 
@@ -602,6 +778,13 @@ mod imp {
                     return Some(event);
                 }
 
+                if pending.note_interruption() {
+                    if let Ok(mut matcher) = matcher.lock() {
+                        matcher.reset();
+                    }
+                    return Some(event);
+                }
+
                 if paused.load(Ordering::Relaxed) || is_shortcut {
                     if let Ok(mut matcher) = matcher.lock() {
                         matcher.reset();
@@ -616,9 +799,9 @@ mod imp {
                         }
                         Some(event)
                     }
-                    Key::Space => handle_delimiter(event, ' ', &matcher, &injecting),
-                    Key::Tab => handle_delimiter(event, '\t', &matcher, &injecting),
-                    Key::Return => handle_delimiter(event, '\n', &matcher, &injecting),
+                    Key::Space => handle_delimiter(event, ' ', &matcher, &injecting, &pending),
+                    Key::Tab => handle_delimiter(event, '\t', &matcher, &injecting, &pending),
+                    Key::Return => handle_delimiter(event, '\n', &matcher, &injecting, &pending),
                     _ => {
                         let mut handled = false;
                         if let Some(name) = event.name.as_deref() {
@@ -654,6 +837,7 @@ mod imp {
         delimiter: char,
         matcher: &Arc<Mutex<ExpansionMatcher>>,
         injecting: &Arc<AtomicBool>,
+        pending: &Arc<PendingExpansion>,
     ) -> Option<Event> {
         let expansion = matcher
             .lock()
@@ -664,14 +848,23 @@ mod imp {
             return Some(event);
         };
 
-        injecting.store(true, Ordering::Release);
+        pending.begin();
         let injecting = Arc::clone(injecting);
+        let pending = Arc::clone(pending);
         thread::spawn(move || {
             let plan = plan_injection(&expansion);
-            if let Err(error) = inject(&plan) {
-                log::warn!("expansion injection failed: {error}");
+            // No frontmost-app check on macOS yet; interruptions still abort.
+            match may_inject(pending.interruptions(), true) {
+                Ok(()) => {
+                    injecting.store(true, Ordering::Release);
+                    if let Err(error) = inject(&plan) {
+                        log::warn!("expansion injection failed: {error}");
+                    }
+                    injecting.store(false, Ordering::Release);
+                }
+                Err(reason) => log::warn!("expansion skipped: {reason}"),
             }
-            injecting.store(false, Ordering::Release);
+            pending.finish();
         });
 
         None
@@ -754,6 +947,37 @@ mod tests {
         let plan = plan_injection(&expansion);
         assert_eq!(plan.text, "plain");
         assert_eq!(plan.left_presses, 0);
+    }
+
+    #[test]
+    fn pending_expansion_counts_interruptions_only_while_in_flight() {
+        let pending = PendingExpansion::default();
+        assert!(!pending.note_interruption(), "nothing in flight yet");
+        assert_eq!(pending.interruptions(), 0);
+
+        pending.begin();
+        assert!(pending.in_flight());
+        assert!(pending.note_interruption());
+        assert!(pending.note_interruption());
+        assert_eq!(pending.interruptions(), 2);
+
+        pending.finish();
+        assert!(!pending.in_flight());
+        assert!(!pending.note_interruption());
+
+        pending.begin();
+        assert_eq!(pending.interruptions(), 0, "begin resets the count");
+    }
+
+    #[test]
+    fn injection_is_refused_after_interruption_or_target_change() {
+        assert_eq!(may_inject(0, true), Ok(()));
+        assert_eq!(may_inject(1, true), Err(AbortReason::Interrupted(1)));
+        assert_eq!(may_inject(0, false), Err(AbortReason::TargetChanged));
+        assert_eq!(may_inject(3, false), Err(AbortReason::TargetChanged));
+        assert!(AbortReason::Interrupted(2)
+            .to_string()
+            .contains("2 keystroke"));
     }
 
     #[test]

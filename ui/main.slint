@@ -88,14 +88,16 @@ export component AppWindow inherits Window {
     title: "Scriblet";
     preferred-width: 1180px;
     preferred-height: 720px;
-    min-width: 900px;
-    min-height: 600px;
+    min-width: 1100px;
+    min-height: 620px;
     background: ScribletTheme.surface;
 
     // Editor state
     in-out property <string> selected-id;
     in-out property <string> title-text;
     in-out property <string> category-text;
+    // Index of category-text within categories; -1 for a custom category.
+    in-out property <int> category-index: -1;
     in-out property <string> trigger-text;
     in-out property <string> replacement-text;
     in-out property <bool> enabled-value: true;
@@ -212,8 +214,7 @@ export component AppWindow inherits Window {
                         selected: root.active-filter == "personal";
                         activated => { root.filter-library("personal"); }
                     }
-                    NavItem {
-                        visible: root.enterprise-available;
+                    if root.enterprise-available : NavItem {
                         label: "Enterprise library";
                         selected: root.active-filter == "enterprise";
                         activated => { root.filter-library("enterprise"); }
@@ -239,8 +240,7 @@ export component AppWindow inherits Window {
                         text: root.paused ? "Resume expansion" : "Pause expansion";
                         clicked => { root.toggle-pause(); }
                     }
-                    Button {
-                        visible: root.enterprise-available;
+                    if root.enterprise-available : Button {
                         enabled: !root.syncing;
                         text: root.syncing ? "Syncing…" : "Sync enterprise library";
                         clicked => { root.sync-now(); }
@@ -259,8 +259,7 @@ export component AppWindow inherits Window {
                             clicked => { root.export-snippets(); }
                         }
                     }
-                    CheckBox {
-                        visible: root.autostart-supported;
+                    if root.autostart-supported : CheckBox {
                         text: "Start at login";
                         checked <=> root.autostart-enabled;
                         toggled => { root.set-autostart(self.checked); }
@@ -276,7 +275,7 @@ export component AppWindow inherits Window {
             Rectangle { width: 1px; background: ScribletTheme.border; }
 
             Rectangle {
-                width: 424px;
+                width: 380px;
                 background: ScribletTheme.surface;
                 VerticalBox {
                     padding: 18px;
@@ -381,8 +380,7 @@ export component AppWindow inherits Window {
                                 font-size: 12px;
                                 horizontal-alignment: center;
                             }
-                            Button {
-                                visible: root.search-text == "" && root.active-filter == "all";
+                            if root.search-text == "" && root.active-filter == "all" : Button {
                                 text: "Create your first snippet";
                                 clicked => { root.clear-form(); }
                             }
@@ -410,8 +408,7 @@ export component AppWindow inherits Window {
                             font-weight: 700;
                         }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Text {
-                            visible: root.selected-id != "";
+                        if root.selected-id != "" : Text {
                             text: root.read-only ? "Enterprise · read-only" : "Selected";
                             color: root.read-only ? ScribletTheme.warning : ScribletTheme.text-secondary;
                             font-size: 11px;
@@ -452,7 +449,7 @@ export component AppWindow inherits Window {
                                     width: 220px;
                                     enabled: !root.read-only;
                                     model: root.categories;
-                                    current-value: root.category-text;
+                                    current-index <=> root.category-index;
                                     selected(value) => { root.category-text = value; }
                                 }
                                 LineEdit {
@@ -494,34 +491,36 @@ export component AppWindow inherits Window {
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                             }
 
-                            HorizontalBox {
+                            // Snippet actions: one row for the selected snippet, one for the form.
+                            if root.selected-id != "" : HorizontalBox {
                                 padding: 0px;
                                 spacing: 8px;
                                 Button {
-                                    visible: root.selected-id != "";
                                     text: "Copy";
                                     clicked => { root.copy-snippet(root.selected-id); }
                                 }
                                 Button {
-                                    visible: root.selected-id != "";
                                     text: "Duplicate";
                                     clicked => { root.duplicate-snippet(root.selected-id); }
                                 }
-                                Button {
-                                    visible: root.selected-id != "" && !root.read-only && !root.confirm-delete;
+                                if !root.read-only && !root.confirm-delete : Button {
                                     text: "Delete";
                                     clicked => { root.confirm-delete = true; }
                                 }
-                                Button {
-                                    visible: root.confirm-delete;
+                                if root.confirm-delete : Button {
                                     text: "Confirm delete";
                                     clicked => { root.confirm-delete = false; root.delete-snippet(root.selected-id); }
                                 }
-                                Button {
-                                    visible: root.confirm-delete;
+                                if root.confirm-delete : Button {
                                     text: "Keep";
                                     clicked => { root.confirm-delete = false; }
                                 }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                            }
+
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 8px;
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                                 Button {
                                     text: "Clear";

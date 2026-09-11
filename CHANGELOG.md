@@ -2,6 +2,23 @@
 
 All notable changes to Scriblet are recorded here. Versions follow semantic versioning.
 
+## [0.5.1] - 2026-09-11
+
+Correctness fixes from the v0.5.0 code review. No new features.
+
+### Fixed
+- **Transactions are now isolated.** The transaction wrapper released the connection while its work ran, so a snippet saved during a background enterprise sync could be silently rolled back with the sync. The connection is now held for the whole transaction and other threads wait. Covered by a two-thread regression test.
+- **Expansion targets are verified.** On Windows the hook records the foreground window and focused control when a trigger fires, and the injection is dropped if either changed. Mouse clicks and window switches reset the pending trigger. On both platforms, any keystroke typed while an expansion is in flight aborts the expansion instead of interleaving with it.
+- **Enterprise sync is order-independent.** Old enterprise bindings are cleared before the new library is applied, so two enterprise snippets can swap triggers. Collisions are checked only against personal bindings and duplicates within the incoming library.
+- **Single instance.** A second launch shows a message and exits instead of installing a second keyboard hook and expanding every trigger twice.
+- **Template rendering** tokenizes the template once. Clipboard text containing `{{cursor}}` or `{{date}}` is typed literally, and only the first `{{cursor}}` positions the caret.
+- **Window layout.** Hidden action buttons still reserved space, so the editor pane overflowed the window; actions now sit on two rows and are only created when applicable. Minimum window size is 1100×620, verified in the widest editor state.
+- **Category dropdown** did not follow the selected snippet's category (Slint ComboBox ignores `current-value`); it is now driven by index.
+
+### Added
+- `tests/uat_scenarios.rs`: twelve end-to-end user stories (create, edit, disable, restart, upgrade from v0.4, enterprise arrive/offline/retire, collision, save during failing sync, export/import between machines, templates, search and filters) run in CI on every platform.
+- `docs/uat-plan.md`: manual desktop checklist for Windows and macOS with expected results and a results table.
+
 ## [0.5.0] - 2026-09-11
 
 ### Fixed

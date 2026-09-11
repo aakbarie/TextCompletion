@@ -149,30 +149,47 @@ where
     repository.transaction(&mut || {
         report = SyncReport::default();
 
-        for record in &records {
-            repository.upsert(&record.snippet)?;
-            report.snippets_upserted += 1;
-
-            repository.delete_bindings_for(record.snippet.id)?;
-            if let Some(binding) = &record.binding {
-                if repository.binding_collision(&binding.value, Some(record.snippet.id))? {
-                    log::warn!(
-                        "enterprise binding {} skipped: already used by another snippet",
-                        binding.value
-                    );
-                    report.skipped_bindings.push(binding.value.clone());
-                    continue;
-                }
-                repository.upsert_binding(binding)?;
-                report.bindings_upserted += 1;
-            }
-        }
-
+        // 1. Clear the old enterprise state first so collision checks only see
+        //    personal bindings. This makes the result independent of row order,
+        //    including two enterprise snippets swapping triggers.
         for snippet in repository.list()? {
-            if snippet.is_enterprise() && !incoming_ids.contains(&snippet.id) {
+            if !snippet.is_enterprise() {
+                continue;
+            }
+            if incoming_ids.contains(&snippet.id) {
+                repository.delete_bindings_for(snippet.id)?;
+            } else {
                 repository.delete(snippet.id)?;
                 report.snippets_removed += 1;
             }
+        }
+
+        // 2. Snippets.
+        for record in &records {
+            repository.upsert(&record.snippet)?;
+            report.snippets_upserted += 1;
+        }
+
+        // 3. Bindings. A value already taken by a personal snippet, or by an
+        //    earlier record in this same library, is skipped and reported.
+        let mut assigned: HashSet<&str> = HashSet::new();
+        for record in &records {
+            let Some(binding) = &record.binding else {
+                continue;
+            };
+            let taken = assigned.contains(binding.value.as_str())
+                || repository.binding_collision(&binding.value, Some(record.snippet.id))?;
+            if taken {
+                log::warn!(
+                    "enterprise binding {} skipped: already used by another snippet",
+                    binding.value
+                );
+                report.skipped_bindings.push(binding.value.clone());
+                continue;
+            }
+            repository.upsert_binding(binding)?;
+            assigned.insert(binding.value.as_str());
+            report.bindings_upserted += 1;
         }
         Ok(())
     })?;
@@ -496,6 +513,41 @@ mod tests {
         let source = FakeSource(Mutex::new(vec![bad]));
         assert!(sync_enterprise(&source, &repo).is_err());
         assert!(repo.list()?.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn enterprise_snippets_can_swap_triggers_between_syncs() -> Result<()> {
+        let repo = SqliteSnippetRepository::open_in_memory()?;
+        let mut a = record("Alpha", ";one");
+        let mut b = record("Beta", ";two");
+        let source = FakeSource(Mutex::new(vec![a.clone(), b.clone()]));
+        sync_enterprise(&source, &repo)?;
+        assert_eq!(repo.find_by_trigger(";one")?.unwrap().id, a.snippet.id);
+
+        // Swap: Alpha takes ;two and Beta takes ;one, in the order that used to fail.
+        a.binding.as_mut().unwrap().value = ";two".into();
+        b.binding.as_mut().unwrap().value = ";one".into();
+        *source.0.lock().unwrap() = vec![a.clone(), b.clone()];
+        let report = sync_enterprise(&source, &repo)?;
+
+        assert!(report.skipped_bindings.is_empty(), "{report:?}");
+        assert_eq!(report.bindings_upserted, 2);
+        assert_eq!(repo.find_by_trigger(";two")?.unwrap().id, a.snippet.id);
+        assert_eq!(repo.find_by_trigger(";one")?.unwrap().id, b.snippet.id);
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_trigger_within_one_library_is_reported_once() -> Result<()> {
+        let repo = SqliteSnippetRepository::open_in_memory()?;
+        let first = record("First", ";dup");
+        let second = record("Second", ";dup");
+        let source = FakeSource(Mutex::new(vec![first.clone(), second.clone()]));
+        let report = sync_enterprise(&source, &repo)?;
+        assert_eq!(report.bindings_upserted, 1);
+        assert_eq!(report.skipped_bindings, vec![";dup".to_string()]);
+        assert_eq!(repo.find_by_trigger(";dup")?.unwrap().id, first.snippet.id);
+        assert!(repo.get(second.snippet.id)?.is_some());
         Ok(())
     }
 }

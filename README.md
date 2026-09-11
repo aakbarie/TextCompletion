@@ -111,9 +111,15 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 ```
 
-Tests cover storage and migrations, transactions, the matcher, templates, the save rules,
-import/export, enterprise sync against a fake source, the Windows key decoder, and a 200-case
-synthetic MD/RN expansion suite.
+Tests cover storage and migrations, transactions (including a two-thread isolation test), the
+matcher, templates, the save rules, import/export, enterprise sync against a fake source, the
+Windows key decoder, twelve end-to-end user scenarios, and a 200-case synthetic MD/RN expansion
+suite.
+
+Desktop behaviour that no test can reach (the keyboard hook, tray, dialogs, start at login) is
+covered by the manual checklist in `docs/uat-plan.md`. Run it on Windows and macOS before a
+release. On Linux the window can be exercised under Xvfb with `SLINT_BACKEND=winit-software`;
+expansion itself is not available there.
 
 ## Releasing
 

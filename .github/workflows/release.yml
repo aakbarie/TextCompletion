@@ -1,15 +1,30 @@
 name: Release
 
-# Push a tag that matches the version in Cargo.toml, e.g. `git tag v0.5.0 && git push origin v0.5.0`.
+# Two ways to release:
+# 1. Push a tag that matches the version in Cargo.toml: `git tag v0.5.0 && git push origin v0.5.0`.
+# 2. Run this workflow manually from the Actions tab with the version; the tag is
+#    created on the chosen ref (main by default) when the release is published.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release; must match Cargo.toml (e.g. 0.5.0)"
+        required: true
+        type: string
+      ref:
+        description: "Branch or commit to release from"
+        required: false
+        default: main
+        type: string
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_REF: ${{ github.event.inputs.ref || github.sha }}
 
 jobs:
   verify-version:
@@ -19,11 +34,15 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - id: version
         shell: bash
+        env:
+          REQUESTED: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${REQUESTED#v}"
           cargo_version="$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
           plist_version="$(grep -A1 CFBundleShortVersionString packaging/macos/Info.plist | tail -1 | sed -E 's/.*<string>(.*)<\/string>.*/\1/')"
           echo "tag=$tag cargo=$cargo_version plist=$plist_version"
@@ -39,6 +58,8 @@ jobs:
       RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -74,6 +95,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -103,6 +126,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_REF }}
       - uses: actions/download-artifact@v4
         with:
           path: release
@@ -130,7 +155,9 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: Scriblet ${{ github.ref_name }}
+          tag_name: v${{ needs.verify-version.outputs.version }}
+          target_commitish: ${{ env.RELEASE_REF }}
+          name: Scriblet v${{ needs.verify-version.outputs.version }}
           body_path: release/notes.md
           files: |
             release/Scriblet.exe
