@@ -1,0 +1,117 @@
+name: Release Scriblet v0.5.0 Windows EXE
+
+# This release PR validates the executable before merge. Merging this file
+# into main publishes the tested Windows build without a separate tag push.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/release-windows-v0.5.0.yml
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-windows-v0.5.0.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scriblet-v0.5.0-windows-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Could not read Cargo metadata" }
+          $package = $metadata.packages | Where-Object { $_.name -eq 'textcompletion' }
+          if ($package.version -ne '0.5.0') { throw "Expected Scriblet 0.5.0, found $($package.version)" }
+          if (-not (Select-String -Path CHANGELOG.md -Pattern '^## \[0\.5\.0\]')) {
+            throw "Missing v0.5.0 changelog"
+          }
+      - name: Regression, smoke, and synthetic tests
+        run: cargo test --all-targets --locked --target x86_64-pc-windows-msvc
+      - name: Build portable EXE
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc --bin scriblet
+      - name: Stage executable and provenance
+        shell: pwsh
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/scriblet.exe dist/Scriblet.exe
+          if ((Get-Item dist/Scriblet.exe).Length -lt 100000) { throw "Unexpectedly small executable" }
+          $hash = (Get-FileHash dist/Scriblet.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Scriblet.exe" | Set-Content -Encoding utf8NoBOM dist/SHA256SUMS.txt
+          @{version='0.5.0'; commit=$env:BUILD_COMMIT; platform='windows-x64'; signed=$false} |
+            ConvertTo-Json | Set-Content -Encoding utf8NoBOM dist/build-info.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Scriblet-Windows-v0.5.0-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Scriblet-Windows-v0.5.0-${{ github.sha }}
+          path: release
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^## \[0\.5\.0\]/ { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release/notes.md
+          cat >> release/notes.md <<'NOTES'
+
+          Windows download: **Scriblet.exe** (portable, x64).
+          Exit the previous Scriblet instance before launching this version.
+          SHA256SUMS.txt and build-info.json identify the binary and its source commit.
+          This executable is unsigned; Microsoft Defender SmartScreen may warn.
+          NOTES
+      - name: Publish exact tested commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Refuse to silently replace a version belonging to another commit.
+          if existing_commit=$(gh api "repos/$RELEASE_REPOSITORY/commits/v0.5.0" --jq .sha 2>/dev/null); then
+            [ "$existing_commit" = "$RELEASE_COMMIT" ] || {
+              echo "v0.5.0 already points to $existing_commit; refusing to replace it."
+              exit 1
+            }
+          fi
+          if gh release view v0.5.0 --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v0.5.0 --repo "$RELEASE_REPOSITORY" \
+              release/Scriblet.exe release/SHA256SUMS.txt release/build-info.json --clobber
+          else
+            gh release create v0.5.0 --repo "$RELEASE_REPOSITORY" \
+              --target "$RELEASE_COMMIT" --title 'Scriblet v0.5.0' \
+              --notes-file release/notes.md \
+              release/Scriblet.exe release/SHA256SUMS.txt release/build-info.json
+          fi
