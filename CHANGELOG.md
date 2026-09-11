@@ -2,6 +2,14 @@
 
 All notable changes to Scriblet are recorded here. Versions follow semantic versioning.
 
+## [0.5.2] - 2026-09-11
+
+Windows upgrade hotfix. This release also includes the v0.5.1 correctness fixes, which were merged to main but did not receive a standalone GitHub release.
+
+### Fixed
+- **Legacy v0.5.0 tray instances are detected before a second hook is installed.** v0.5.0 could remain hidden in the system tray while a newer Scriblet was launched, leaving two `WH_KEYBOARD_LL` hook chains active. The first process could consume the first Space/Tab/Enter while the older process remained armed and expanded on the next delimiter, producing delayed duplicate or interleaved text. Newer Scriblet builds now detect the legacy top-level window and refuse to install a second global hook.
+- Includes the v0.5.1 target/focus verification, input-interruption cancellation, mouse/caret reset behavior, and single-instance file lock for current versions.
+
 ## [0.5.1] - 2026-09-11
 
 Correctness fixes from the v0.5.0 code review. No new features.
