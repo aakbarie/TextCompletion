@@ -5,7 +5,9 @@
 //! - `{{clipboard}}`: the current text clipboard contents
 //! - `{{cursor}}`: where the caret should land after expansion
 //!
-//! Unknown placeholders are left untouched so nothing is silently dropped.
+//! The template is tokenized once. Substituted values are inserted literally,
+//! so clipboard text that happens to contain `{{cursor}}` is typed as-is and
+//! never treated as an instruction. Unknown placeholders are left untouched.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedTemplate {
@@ -21,29 +23,91 @@ pub const CURSOR_PLACEHOLDER: &str = "{{cursor}}";
 /// Date format used for `{{date}}`.
 pub const DATE_FORMAT: &str = "%m/%d/%Y";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Segment<'a> {
+    Literal(&'a str),
+    Date,
+    Clipboard,
+    Cursor,
+}
+
+/// Splits a template into literal text and placeholders in one pass.
+fn tokenize(template: &str) -> Vec<Segment<'_>> {
+    const PLACEHOLDERS: [(&str, Segment<'static>); 3] = [
+        (DATE_PLACEHOLDER, Segment::Date),
+        (CLIPBOARD_PLACEHOLDER, Segment::Clipboard),
+        (CURSOR_PLACEHOLDER, Segment::Cursor),
+    ];
+
+    let mut segments = Vec::new();
+    let mut literal_start = 0;
+    let mut index = 0;
+
+    while index < template.len() {
+        let rest = &template[index..];
+        if let Some((token, segment)) = PLACEHOLDERS
+            .iter()
+            .find(|(token, _)| rest.starts_with(token))
+        {
+            if literal_start < index {
+                segments.push(Segment::Literal(&template[literal_start..index]));
+            }
+            segments.push(*segment);
+            index += token.len();
+            literal_start = index;
+        } else {
+            // Advance one character; placeholders are ASCII so this cannot split one.
+            index += rest.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    if literal_start < template.len() {
+        segments.push(Segment::Literal(&template[literal_start..]));
+    }
+    segments
+}
+
+/// Renders `template` with the given values. A placeholder whose value is
+/// `None` is kept literally so nothing is silently dropped. Only the first
+/// `{{cursor}}` positions the caret; any others are removed.
 pub fn render_template(
     template: &str,
     date: Option<&str>,
     clipboard: Option<&str>,
 ) -> RenderedTemplate {
-    let mut text = template.to_string();
-
-    if let Some(date) = date {
-        text = text.replace(DATE_PLACEHOLDER, date);
-    }
-    if let Some(clipboard) = clipboard {
-        text = text.replace(CLIPBOARD_PLACEHOLDER, clipboard);
+    struct Output {
+        text: String,
+        chars: usize,
     }
 
-    let cursor_offset_from_end = text.find(CURSOR_PLACEHOLDER).map(|index| {
-        let after = &text[index + CURSOR_PLACEHOLDER.len()..];
-        after.chars().count()
-    });
-    text = text.replace(CURSOR_PLACEHOLDER, "");
+    impl Output {
+        fn push(&mut self, piece: &str) {
+            self.text.push_str(piece);
+            self.chars += piece.chars().count();
+        }
+    }
+
+    let mut out = Output {
+        text: String::with_capacity(template.len()),
+        chars: 0,
+    };
+    let mut chars_before_cursor: Option<usize> = None;
+
+    for segment in tokenize(template) {
+        match segment {
+            Segment::Literal(piece) => out.push(piece),
+            Segment::Date => out.push(date.unwrap_or(DATE_PLACEHOLDER)),
+            Segment::Clipboard => out.push(clipboard.unwrap_or(CLIPBOARD_PLACEHOLDER)),
+            Segment::Cursor => {
+                if chars_before_cursor.is_none() {
+                    chars_before_cursor = Some(out.chars);
+                }
+            }
+        }
+    }
 
     RenderedTemplate {
-        text,
-        cursor_offset_from_end,
+        cursor_offset_from_end: chars_before_cursor.map(|before| out.chars - before),
+        text: out.text,
     }
 }
 
@@ -89,6 +153,48 @@ mod tests {
     fn cursor_offset_counts_unicode_characters() {
         let rendered = render_template("A {{cursor}}βγ", None, None);
         assert_eq!(rendered.text, "A βγ");
+        assert_eq!(rendered.cursor_offset_from_end, Some(2));
+    }
+
+    #[test]
+    fn substitutes_date_and_clipboard() {
+        let rendered = render_template(
+            "On {{date}}: {{clipboard}}!",
+            Some("09/11/2026"),
+            Some("Jane"),
+        );
+        assert_eq!(rendered.text, "On 09/11/2026: Jane!");
+        assert_eq!(rendered.cursor_offset_from_end, None);
+    }
+
+    #[test]
+    fn missing_values_keep_placeholders_literal() {
+        let rendered = render_template("{{date}} {{clipboard}} {{service}}", None, None);
+        assert_eq!(rendered.text, "{{date}} {{clipboard}} {{service}}");
+    }
+
+    #[test]
+    fn clipboard_containing_markers_is_typed_literally() {
+        let rendered = render_template(
+            "Note: {{clipboard}} end{{cursor}}",
+            Some("D"),
+            Some("x {{cursor}} {{date}} y"),
+        );
+        assert_eq!(rendered.text, "Note: x {{cursor}} {{date}} y end");
+        assert_eq!(rendered.cursor_offset_from_end, Some(0));
+    }
+
+    #[test]
+    fn only_the_first_cursor_marker_positions_the_caret() {
+        let rendered = render_template("ab{{cursor}}cd{{cursor}}ef", None, None);
+        assert_eq!(rendered.text, "abcdef");
+        assert_eq!(rendered.cursor_offset_from_end, Some(4));
+    }
+
+    #[test]
+    fn adjacent_and_leading_markers() {
+        let rendered = render_template("{{cursor}}{{date}}{{clipboard}}", Some("1"), Some("2"));
+        assert_eq!(rendered.text, "12");
         assert_eq!(rendered.cursor_offset_from_end, Some(2));
     }
 

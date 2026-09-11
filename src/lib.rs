@@ -9,6 +9,7 @@ pub mod app;
 pub mod autostart;
 pub mod enterprise;
 pub mod expansion;
+pub mod instance;
 pub mod model;
 pub mod runtime;
 pub mod storage;

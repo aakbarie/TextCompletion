@@ -15,6 +15,7 @@ use textcompletion::{
     autostart,
     enterprise::EnterpriseConfig,
     expansion::SharedSnippetIndex,
+    instance,
     model::SnippetScope,
     runtime::{spawn_global_binding, PauseFlag, RuntimeStatus},
     storage::{SnippetRepository, SqliteSnippetRepository},
@@ -37,6 +38,29 @@ fn main() {
     };
     init_logging(&dirs);
     log::info!("Scriblet {APP_VERSION} starting");
+
+    // One process, one keyboard hook. A second launch is told to use the tray.
+    let _instance = match instance::acquire(dirs.data_local_dir()) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            platform::inform(
+                "Scriblet is already running",
+                "Open it from the tray icon. Only one Scriblet can run at a time so triggers are not expanded twice.",
+            );
+            return;
+        }
+        Err(error) => {
+            log::warn!("single-instance lock unavailable, continuing: {error:#}");
+            match run(&dirs) {
+                Ok(()) => return,
+                Err(error) => {
+                    log::error!("{error:#}");
+                    platform::fatal(&format!("{error:#}"));
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
 
     if let Err(error) = run(&dirs) {
         log::error!("{error:#}");
