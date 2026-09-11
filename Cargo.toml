@@ -1,6 +1,6 @@
 [package]
 name = "textcompletion"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 build = "build.rs"
 description = "Scriblet: local-first text expansion for Windows and macOS"

@@ -1,17 +1,18 @@
 name: Release
 
-# Two ways to release:
-# 1. Push a tag that matches the version in Cargo.toml: `git tag v0.5.0 && git push origin v0.5.0`.
-# 2. Run this workflow manually from the Actions tab with the version; the tag is
-#    created on the chosen ref (main by default) when the release is published.
+# Releases are normally created by merging a version bump to main. The workflow
+# can also be run manually to rebuild/publish the version already recorded in
+# Cargo.toml from a chosen ref.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths:
+      - Cargo.toml
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release; must match Cargo.toml (e.g. 0.5.0)"
-        required: true
+        description: "Version to release; must match Cargo.toml (e.g. 0.5.2)"
+        required: false
         type: string
       ref:
         description: "Branch or commit to release from"
@@ -28,7 +29,7 @@ env:
 
 jobs:
   verify-version:
-    name: Verify tag matches Cargo.toml
+    name: Verify release version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -39,17 +40,22 @@ jobs:
       - id: version
         shell: bash
         env:
-          REQUESTED: ${{ github.event.inputs.version || github.ref_name }}
+          REQUESTED: ${{ github.event.inputs.version || '' }}
         run: |
           set -euo pipefail
-          tag="${REQUESTED#v}"
           cargo_version="$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
           plist_version="$(grep -A1 CFBundleShortVersionString packaging/macos/Info.plist | tail -1 | sed -E 's/.*<string>(.*)<\/string>.*/\1/')"
-          echo "tag=$tag cargo=$cargo_version plist=$plist_version"
-          [ "$tag" = "$cargo_version" ] || { echo "Tag v$tag does not match Cargo.toml version $cargo_version"; exit 1; }
-          [ "$tag" = "$plist_version" ] || { echo "Tag v$tag does not match Info.plist version $plist_version"; exit 1; }
-          grep -q "^## \[$tag\]" CHANGELOG.md || { echo "CHANGELOG.md has no section for $tag"; exit 1; }
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          requested="${REQUESTED#v}"
+          if [ -n "$requested" ]; then
+            release_version="$requested"
+          else
+            release_version="$cargo_version"
+          fi
+          echo "release=$release_version cargo=$cargo_version plist=$plist_version"
+          [ "$release_version" = "$cargo_version" ] || { echo "Release v$release_version does not match Cargo.toml version $cargo_version"; exit 1; }
+          [ "$release_version" = "$plist_version" ] || { echo "Release v$release_version does not match Info.plist version $plist_version"; exit 1; }
+          grep -q "^## \[$release_version\]" CHANGELOG.md || { echo "CHANGELOG.md has no section for $release_version"; exit 1; }
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
 
   windows:
     needs: verify-version
