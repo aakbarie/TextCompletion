@@ -1,6 +1,6 @@
+use tempfile::tempdir;
 use textcompletion::model::{Binding, Snippet};
 use textcompletion::storage::{SnippetRepository, SqliteSnippetRepository};
-use tempfile::tempdir;
 
 #[test]
 fn persists_and_finds_snippet_by_trigger() {
@@ -10,7 +10,8 @@ fn persists_and_finds_snippet_by_trigger() {
     snippet.title = "Agree with determination".into();
     snippet.category = "Medical Director".into();
     db.upsert(&snippet).unwrap();
-    db.upsert_binding(&Binding::text(snippet.id, ";agree")).unwrap();
+    db.upsert_binding(&Binding::text(snippet.id, ";agree"))
+        .unwrap();
 
     let loaded = db.find_by_trigger(";agree").unwrap().unwrap();
     assert_eq!(loaded.title, "Agree with determination");
@@ -33,7 +34,8 @@ fn search_matches_title_category_trigger_and_replacement() {
     rn.title = "Outreach".into();
     rn.category = "RN".into();
     db.upsert(&rn).unwrap();
-    db.upsert_binding(&Binding::text(rn.id, ";outreach")).unwrap();
+    db.upsert_binding(&Binding::text(rn.id, ";outreach"))
+        .unwrap();
 
     assert_eq!(db.search("peer").unwrap().len(), 1);
     assert_eq!(db.search("RN").unwrap().len(), 1);
@@ -47,7 +49,8 @@ fn disabled_snippet_does_not_expand() {
     let mut snippet = Snippet::personal("", "Should not expand");
     snippet.enabled = false;
     db.upsert(&snippet).unwrap();
-    db.upsert_binding(&Binding::text(snippet.id, ";off")).unwrap();
+    db.upsert_binding(&Binding::text(snippet.id, ";off"))
+        .unwrap();
 
     assert!(db.find_by_trigger(";off").unwrap().is_none());
 }
