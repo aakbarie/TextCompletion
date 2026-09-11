@@ -19,13 +19,13 @@ slint = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
-[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 enigo = "0.6.1"
 rdev = { version = "0.5.3", features = ["unstable_grab"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 odbc-api = { version = "29", default-features = false }
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"
