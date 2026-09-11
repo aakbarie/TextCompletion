@@ -1,81 +1,131 @@
-# TextCompletion
+# Scriblet
 
-A small, fast Windows text-expansion application built in Rust.
+Scriblet is a small, fast text-expansion app for Windows and macOS, written in Rust.
+Type a short binding such as `;sig` or `;p2p` in any application, press space, Tab, or Enter,
+and Scriblet replaces it with the phrase you saved.
 
-## Goal
+It is local-first: snippets live in a SQLite database on your machine, expansion never
+touches the network, and there is no telemetry.
 
-Type a trigger such as `;addr`, `;sig`, or `;brb` anywhere in Windows and replace it immediately with configured text.
+## Features
 
-The first release is intentionally simple: no AI, no cloud dependency, and no server requirement.
+- Global expansion in every application, with one atomic keystroke batch per expansion
+- Snippet library with titles, categories, favorites, search, and enable/disable
+- Optional text binding per snippet, with collision detection
+- Template variables: `{{date}}`, `{{clipboard}}`, and `{{cursor}}`
+- Pause and resume expansion from the window or the tray menu
+- Runs from the system tray; closing the window keeps expansion alive
+- Start at login (Windows Run key, macOS LaunchAgent)
+- JSON import and export of the personal library
+- Enterprise library sync from Microsoft SQL Server on Windows, cached for offline use
+- Multiline and Unicode phrases
+
+## Install
+
+Download the latest release from the GitHub Releases page:
+
+- `Scriblet.exe`: portable Windows x64 build. It is unsigned, so SmartScreen may warn on first run.
+- `Scriblet-macOS-Intel.zip` and `Scriblet-macOS-AppleSilicon.zip`: app bundles. They are not
+  notarized, so use "Open" from the context menu on first launch, then grant Accessibility
+  permission when prompted. Scriblet needs it to watch and replace keystrokes.
+
+## Using Scriblet
+
+1. Click **New snippet**, write the phrase, optionally set a binding such as `;addr`, and save.
+2. In any app, type the binding followed by space, Tab, or Enter.
+3. Use the sidebar to filter by favorites, personal or enterprise library, or category.
+   Categories are built from the snippets you have, plus a few defaults.
+
+Template variables inside a phrase are resolved at the moment of expansion:
+
+| Variable        | Result                                             |
+|-----------------|----------------------------------------------------|
+| `{{date}}`      | Today's date, `MM/DD/YYYY`                         |
+| `{{clipboard}}` | Current text clipboard                             |
+| `{{cursor}}`    | Where the caret lands after the phrase is inserted |
+
+The header shows two badges: the expansion status (active, paused, or why it is unavailable)
+and the result of the last action. Errors, sync results, and hook problems are also written to
+`scriblet.log` in the data directory.
+
+Data directory:
+
+- Windows: `%LOCALAPPDATA%\aakbarie\Scriblet\data`
+- macOS: `~/Library/Application Support/com.aakbarie.Scriblet`
+
+## Enterprise library (Windows)
+
+Scriblet can pull a centrally governed snippet library from SQL Server using Windows
+Integrated Authentication. Sync runs in the background at startup and on demand from the
+sidebar, and the result is cached locally so expansion works offline. Enterprise snippets are
+read-only in the editor; duplicate one to make a personal copy.
+
+Sync is enabled by setting two environment variables:
+
+```text
+SCRIBLET_SQL_SERVER=<server host>
+SCRIBLET_SQL_DATABASE=<database>
+```
+
+See `docs/enterprise-sqlserver.md` for all settings, the schema, and the privacy boundary.
 
 ## Architecture
 
-- **Rust** for the application and Windows integration
-- **Slint** for a modern lightweight desktop UI
-- **SQLite** for local persistence and offline execution
-- a platform-independent expansion matcher isolated from Windows input plumbing
-- eventual **Microsoft SQL Server** synchronization for shared/team/enterprise libraries
-
-SQL Server will not sit in the typing path. The intended enterprise architecture is:
-
 ```text
-SQL Server shared libraries
-          |
-          | sync
-          v
-   Local SQLite cache
-          |
-          v
-   Expansion engine
-          |
-          v
-Focused Windows application
+ui/main.slint          Slint window: library, editor, controls
+src/main.rs            Window glue, tray, background sync, logging
+src/app.rs             Save/delete/duplicate rules, filters, index rebuild
+src/storage.rs         SQLite repository with transactions and versioned migrations
+src/expansion.rs       In-memory trigger index and matcher (platform independent)
+src/template.rs        {{date}}, {{clipboard}}, {{cursor}} rendering
+src/runtime.rs         Keyboard hook and injection: Windows (WH_KEYBOARD_LL + SendInput),
+                       macOS (rdev + enigo), stub elsewhere
+src/enterprise.rs      Enterprise sync and the SQL Server source
+src/transfer.rs        JSON import/export
+src/autostart.rs       Start-at-login registration
+src/tray.rs            Tray icon and menu
+src/platform.rs        File dialogs and fatal-error message box
 ```
 
-This keeps expansion instantaneous and available when the network or VPN is unavailable.
+SQL Server never sits in the typing path:
 
-## Current branch
+```text
+SQL Server shared library ──sync──▶ local SQLite cache ──▶ in-memory index ──▶ keyboard hook
+```
 
-`rust-mvp` establishes:
+## Building
 
-- Rust application manifest
-- Slint snippet editor
-- SQLite repository abstraction
-- sync-ready snippet model with stable IDs, scope, version, and timestamps
-- testable expansion matcher
-- Windows GitHub Actions build producing `textcompletion.exe`
+```sh
+cargo build --release --bin scriblet
+```
 
-## V1
+The core library, tests, and a non-expanding window build on Linux too, which is what CI
+uses for formatting and lint. Global expansion and the tray are implemented for Windows and
+macOS only.
 
-1. Create, edit, enable, and delete snippets.
-2. Detect triggers globally while TextCompletion is running.
-3. Replace a trigger in the currently focused Windows application.
-4. Support multiline and Unicode replacements.
-5. Search snippets quickly.
-6. Import/export snippets.
-7. Pause/resume expansion.
-8. Run primarily from the Windows system tray.
-9. Optionally start with Windows.
+## Testing
 
-## Data scopes
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+```
 
-The schema supports three scopes from the start:
+Tests cover storage and migrations, transactions, the matcher, templates, the save rules,
+import/export, enterprise sync against a fake source, the Windows key decoder, and a 200-case
+synthetic MD/RN expansion suite.
 
-- `Personal`: private/local snippets
-- `Shared`: team content, synchronized later
-- `Enterprise`: centrally governed content, synchronized later
+## Releasing
 
-Only personal/local behavior is required for v1.
+1. Bump `version` in `Cargo.toml` and both version keys in `packaging/macos/Info.plist`.
+2. Add a `## [x.y.z]` section to `CHANGELOG.md`.
+3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
-## Design principles
-
-- Local-first and offline-first.
-- Expansion must feel instantaneous.
-- No server round trip during typing.
-- Keep matching independent of UI and Windows APIs.
-- Keep persistence behind a repository interface so SQL Server synchronization can be added without replacing the core engine.
-- Prefer a small native binary over a browser-shell desktop application.
+The release workflow verifies the three versions match, runs the tests on every platform,
+builds Windows, Intel macOS, and Apple Silicon macOS binaries, and publishes a GitHub release
+with the changelog section as its notes.
 
 ## Product references
 
-Breevy/aBreevy8, PhraseExpress, and Key2Scribe are being used as competitive/product references. See `docs/product-reference.md`.
+Breevy/aBreevy8, PhraseExpress, and Key2Scribe are used as product references.
+See `docs/product-reference.md`.

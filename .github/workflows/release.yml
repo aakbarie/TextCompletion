@@ -1,0 +1,138 @@
+name: Release
+
+# Push a tag that matches the version in Cargo.toml, e.g. `git tag v0.5.0 && git push origin v0.5.0`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-version:
+    name: Verify tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version="$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          plist_version="$(grep -A1 CFBundleShortVersionString packaging/macos/Info.plist | tail -1 | sed -E 's/.*<string>(.*)<\/string>.*/\1/')"
+          echo "tag=$tag cargo=$cargo_version plist=$plist_version"
+          [ "$tag" = "$cargo_version" ] || { echo "Tag v$tag does not match Cargo.toml version $cargo_version"; exit 1; }
+          [ "$tag" = "$plist_version" ] || { echo "Tag v$tag does not match Info.plist version $plist_version"; exit 1; }
+          grep -q "^## \[$tag\]" CHANGELOG.md || { echo "CHANGELOG.md has no section for $tag"; exit 1; }
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: verify-version
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --all-targets --locked --target x86_64-pc-windows-msvc
+      - name: Build Scriblet.exe
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc --bin scriblet
+      - name: Stage
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/scriblet.exe dist/Scriblet.exe
+          $size = (Get-Item dist/Scriblet.exe).Length
+          if ($size -lt 100000) { throw "Scriblet.exe is unexpectedly small: $size bytes" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/Scriblet.exe
+          if-no-files-found: error
+
+  macos:
+    needs: verify-version
+    strategy:
+      matrix:
+        include:
+          - name: Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - name: AppleSilicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --all-targets --locked --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin scriblet
+      - name: Package Scriblet.app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/Scriblet.app/Contents/MacOS
+          cp target/${{ matrix.target }}/release/scriblet dist/Scriblet.app/Contents/MacOS/scriblet
+          chmod +x dist/Scriblet.app/Contents/MacOS/scriblet
+          cp packaging/macos/Info.plist dist/Scriblet.app/Contents/Info.plist
+          ditto -c -k --sequesterRsrc --keepParent dist/Scriblet.app "dist/Scriblet-macOS-${{ matrix.name }}.zip"
+          test -s "dist/Scriblet-macOS-${{ matrix.name }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.name }}
+          path: dist/Scriblet-macOS-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [verify-version, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify-version.outputs.version }}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release/notes.md
+          {
+            echo
+            echo "Assets:"
+            echo "- Scriblet.exe: portable Windows x64 build (unsigned; SmartScreen may warn)"
+            echo "- Scriblet-macOS-Intel.zip: Intel macOS app bundle"
+            echo "- Scriblet-macOS-AppleSilicon.zip: Apple Silicon macOS app bundle"
+            echo
+            echo "macOS requires Accessibility permission for global text expansion. macOS builds are not code-signed or notarized."
+          } >> release/notes.md
+          cat release/notes.md
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Scriblet ${{ github.ref_name }}
+          body_path: release/notes.md
+          files: |
+            release/Scriblet.exe
+            release/Scriblet-macOS-Intel.zip
+            release/Scriblet-macOS-AppleSilicon.zip

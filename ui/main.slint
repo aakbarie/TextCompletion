@@ -10,6 +10,7 @@ export global ScribletTheme {
     in property <color> accent: #1768b2;
     in property <color> accent-soft: #e8f2fb;
     in property <color> success: #287a4b;
+    in property <color> warning: #b26a00;
     in property <color> danger: #a83a3a;
 }
 
@@ -21,23 +22,26 @@ export struct SnippetRow {
     preview: string,
     favorite: bool,
     enabled: bool,
+    enterprise: bool,
 }
 
 component NavItem inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
     callback activated();
-    height: 38px;
+    height: 34px;
     border-radius: 7px;
     background: selected ? ScribletTheme.accent-soft : transparent;
 
     Text {
         x: 12px;
+        width: parent.width - 24px;
         vertical-alignment: center;
         text: root.label;
         color: selected ? ScribletTheme.accent : ScribletTheme.text-secondary;
         font-weight: selected ? 700 : 500;
-        font-size: 14px;
+        font-size: 13px;
+        overflow: elide;
     }
 
     TouchArea { clicked => { root.activated(); } }
@@ -51,7 +55,7 @@ component SectionLabel inherits Text {
 
 component StatusBadge inherits Rectangle {
     in property <string> label;
-    width: 300px;
+    in property <color> dot: ScribletTheme.accent;
     height: 32px;
     border-radius: 16px;
     background: ScribletTheme.surface-muted;
@@ -66,7 +70,7 @@ component StatusBadge inherits Rectangle {
             width: 7px;
             height: 7px;
             border-radius: 4px;
-            background: ScribletTheme.accent;
+            background: root.dot;
             vertical-stretch: 0;
         }
         Text {
@@ -82,10 +86,13 @@ component StatusBadge inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "Scriblet";
-    width: 1180px;
-    height: 720px;
+    preferred-width: 1180px;
+    preferred-height: 720px;
+    min-width: 900px;
+    min-height: 600px;
     background: ScribletTheme.surface;
 
+    // Editor state
     in-out property <string> selected-id;
     in-out property <string> title-text;
     in-out property <string> category-text;
@@ -93,11 +100,26 @@ export component AppWindow inherits Window {
     in-out property <string> replacement-text;
     in-out property <bool> enabled-value: true;
     in-out property <bool> favorite-value: false;
+    in-out property <bool> confirm-delete: false;
+    in property <bool> read-only: false;
+
+    // Library state
     in-out property <string> search-text;
-    in property <string> active-filter: "All";
-    in property <string> status-text: "Ready";
-    in property <string> library-count-text: "0 snippets";
+    in property <string> active-filter: "all";
+    in property <[string]> categories;
     in property <[SnippetRow]> snippet-rows;
+    in property <string> library-count-text: "0 snippets";
+
+    // Runtime state
+    in property <string> status-text: "Ready";
+    in property <string> expansion-status-text: "Starting expansion";
+    in property <bool> expansion-active: false;
+    in property <bool> paused: false;
+    in property <bool> enterprise-available: false;
+    in property <bool> syncing: false;
+    in property <bool> autostart-supported: false;
+    in-out property <bool> autostart-enabled: false;
+    in property <string> app-version;
 
     callback save-snippet();
     callback clear-form();
@@ -107,9 +129,15 @@ export component AppWindow inherits Window {
     callback delete-snippet(string);
     callback duplicate-snippet(string);
     callback copy-snippet(string);
+    callback toggle-pause();
+    callback sync-now();
+    callback import-snippets();
+    callback export-snippets();
+    callback set-autostart(bool);
 
     VerticalBox {
         spacing: 0px;
+        padding: 0px;
 
         Rectangle {
             height: 82px;
@@ -129,7 +157,7 @@ export component AppWindow inherits Window {
                         font-weight: 700;
                     }
                     Text {
-                        text: "Your little writing helper";
+                        text: "Your little writing helper · v" + root.app-version;
                         color: ScribletTheme.text-secondary;
                         font-size: 12px;
                     }
@@ -137,7 +165,15 @@ export component AppWindow inherits Window {
 
                 Rectangle { horizontal-stretch: 1; background: transparent; }
 
-                StatusBadge { label: root.status-text; }
+                StatusBadge {
+                    width: 260px;
+                    label: root.paused ? "Expansion paused" : root.expansion-status-text;
+                    dot: root.paused ? ScribletTheme.warning : (root.expansion-active ? ScribletTheme.success : ScribletTheme.danger);
+                }
+                StatusBadge {
+                    width: 320px;
+                    label: root.status-text;
+                }
                 Text {
                     text: root.library-count-text;
                     color: ScribletTheme.text-secondary;
@@ -151,51 +187,84 @@ export component AppWindow inherits Window {
 
         HorizontalBox {
             spacing: 0px;
+            padding: 0px;
 
             Rectangle {
-                width: 210px;
+                width: 230px;
                 background: ScribletTheme.surface-raised;
                 VerticalBox {
                     padding: 18px;
-                    spacing: 7px;
+                    spacing: 6px;
 
                     SectionLabel { text: "LIBRARY"; }
                     NavItem {
                         label: "All snippets";
-                        selected: root.active-filter == "All";
-                        activated => { root.filter-library("All"); }
+                        selected: root.active-filter == "all";
+                        activated => { root.filter-library("all"); }
                     }
                     NavItem {
                         label: "★  Favorites";
-                        selected: root.active-filter == "Favorites";
-                        activated => { root.filter-library("Favorites"); }
+                        selected: root.active-filter == "favorites";
+                        activated => { root.filter-library("favorites"); }
+                    }
+                    NavItem {
+                        label: "Personal library";
+                        selected: root.active-filter == "personal";
+                        activated => { root.filter-library("personal"); }
+                    }
+                    NavItem {
+                        visible: root.enterprise-available;
+                        label: "Enterprise library";
+                        selected: root.active-filter == "enterprise";
+                        activated => { root.filter-library("enterprise"); }
                     }
 
-                    Rectangle { height: 10px; background: transparent; }
+                    Rectangle { height: 8px; background: transparent; }
                     SectionLabel { text: "CATEGORIES"; }
-                    NavItem {
-                        label: "Clinical";
-                        selected: root.active-filter == "Clinical";
-                        activated => { root.filter-library("Clinical"); }
-                    }
-                    NavItem {
-                        label: "Administrative";
-                        selected: root.active-filter == "Administrative";
-                        activated => { root.filter-library("Administrative"); }
-                    }
-                    NavItem {
-                        label: "Signatures";
-                        selected: root.active-filter == "Signatures";
-                        activated => { root.filter-library("Signatures"); }
-                    }
-                    NavItem {
-                        label: "Personal";
-                        selected: root.active-filter == "Personal";
-                        activated => { root.filter-library("Personal"); }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 4px;
+                            for category in root.categories : NavItem {
+                                label: category;
+                                selected: root.active-filter == "category:" + category;
+                                activated => { root.filter-library("category:" + category); }
+                            }
+                        }
                     }
 
-                    Rectangle { vertical-stretch: 1; background: transparent; }
                     Rectangle { height: 1px; background: ScribletTheme.border; }
+                    SectionLabel { text: "CONTROLS"; }
+                    Button {
+                        text: root.paused ? "Resume expansion" : "Pause expansion";
+                        clicked => { root.toggle-pause(); }
+                    }
+                    Button {
+                        visible: root.enterprise-available;
+                        enabled: !root.syncing;
+                        text: root.syncing ? "Syncing…" : "Sync enterprise library";
+                        clicked => { root.sync-now(); }
+                    }
+                    HorizontalBox {
+                        padding: 0px;
+                        spacing: 6px;
+                        Button {
+                            text: "Import…";
+                            horizontal-stretch: 1;
+                            clicked => { root.import-snippets(); }
+                        }
+                        Button {
+                            text: "Export…";
+                            horizontal-stretch: 1;
+                            clicked => { root.export-snippets(); }
+                        }
+                    }
+                    CheckBox {
+                        visible: root.autostart-supported;
+                        text: "Start at login";
+                        checked <=> root.autostart-enabled;
+                        toggled => { root.set-autostart(self.checked); }
+                    }
                     Text {
                         text: "Local first · no telemetry";
                         color: ScribletTheme.text-secondary;
@@ -213,18 +282,11 @@ export component AppWindow inherits Window {
                     padding: 18px;
                     spacing: 12px;
 
-                    HorizontalBox {
-                        spacing: 8px;
-                        LineEdit {
-                            text <=> root.search-text;
-                            placeholder-text: "Search snippets";
-                            horizontal-stretch: 1;
-                            accepted => { root.search-library(self.text); }
-                        }
-                        Button {
-                            text: "Search";
-                            clicked => { root.search-library(root.search-text); }
-                        }
+                    LineEdit {
+                        text <=> root.search-text;
+                        placeholder-text: "Search snippets";
+                        edited(text) => { root.search-library(text); }
+                        accepted(text) => { root.search-library(text); }
                     }
 
                     Button {
@@ -240,7 +302,7 @@ export component AppWindow inherits Window {
                         border-radius: 10px;
 
                         ScrollView {
-                            visible: root.library-count-text != "0 snippets";
+                            visible: root.snippet-rows.length > 0;
                             VerticalLayout {
                                 padding: 9px;
                                 spacing: 7px;
@@ -251,25 +313,29 @@ export component AppWindow inherits Window {
                                     background: root.selected-id == row.id ? ScribletTheme.accent-soft : ScribletTheme.surface-raised;
                                     border-width: 1px;
                                     border-color: root.selected-id == row.id ? ScribletTheme.accent : ScribletTheme.border;
+                                    opacity: row.enabled ? 1.0 : 0.55;
 
                                     VerticalLayout {
                                         padding: 11px;
                                         spacing: 4px;
 
                                         HorizontalLayout {
+                                            spacing: 6px;
                                             Text {
                                                 text: (row.favorite ? "★ " : "") + row.title;
                                                 color: ScribletTheme.text-primary;
                                                 font-size: 14px;
                                                 font-weight: 700;
+                                                overflow: elide;
+                                                horizontal-stretch: 1;
                                             }
-                                            Rectangle { horizontal-stretch: 1; background: transparent; }
                                             Rectangle {
                                                 visible: row.binding != "";
                                                 height: 23px;
+                                                width: binding-label.preferred-width + 14px;
                                                 border-radius: 5px;
                                                 background: ScribletTheme.accent-soft;
-                                                Text {
+                                                binding-label := Text {
                                                     x: 7px;
                                                     text: row.binding;
                                                     color: ScribletTheme.accent;
@@ -280,7 +346,7 @@ export component AppWindow inherits Window {
                                         }
 
                                         Text {
-                                            text: row.category;
+                                            text: (row.enterprise ? "Enterprise · " : "") + row.category + (row.enabled ? "" : " · disabled");
                                             color: ScribletTheme.text-secondary;
                                             font-size: 10px;
                                         }
@@ -298,24 +364,25 @@ export component AppWindow inherits Window {
                         }
 
                         VerticalBox {
-                            visible: root.library-count-text == "0 snippets";
+                            visible: root.snippet-rows.length == 0;
                             alignment: center;
                             spacing: 10px;
                             Rectangle { vertical-stretch: 1; background: transparent; }
                             Text {
-                                text: "No snippets yet";
+                                text: root.search-text == "" && root.active-filter == "all" ? "No snippets yet" : "Nothing matches";
                                 color: ScribletTheme.text-primary;
                                 font-size: 17px;
                                 font-weight: 700;
                                 horizontal-alignment: center;
                             }
                             Text {
-                                text: "Create a phrase once, then reuse it anywhere.";
+                                text: root.search-text == "" && root.active-filter == "all" ? "Create a phrase once, then reuse it anywhere." : "Try a different search or filter.";
                                 color: ScribletTheme.text-secondary;
                                 font-size: 12px;
                                 horizontal-alignment: center;
                             }
                             Button {
+                                visible: root.search-text == "" && root.active-filter == "all";
                                 text: "Create your first snippet";
                                 clicked => { root.clear-form(); }
                             }
@@ -335,8 +402,9 @@ export component AppWindow inherits Window {
                     spacing: 12px;
 
                     HorizontalBox {
+                        padding: 0px;
                         Text {
-                            text: root.selected-id == "" ? "Create snippet" : "Edit snippet";
+                            text: root.selected-id == "" ? "Create snippet" : (root.read-only ? "View snippet" : "Edit snippet");
                             color: ScribletTheme.text-primary;
                             font-size: 20px;
                             font-weight: 700;
@@ -344,17 +412,18 @@ export component AppWindow inherits Window {
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Text {
                             visible: root.selected-id != "";
-                            text: "Selected";
-                            color: ScribletTheme.text-secondary;
+                            text: root.read-only ? "Enterprise · read-only" : "Selected";
+                            color: root.read-only ? ScribletTheme.warning : ScribletTheme.text-secondary;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
                     }
 
                     Text {
-                        text: root.selected-id == "" ? "Save a reusable phrase and optionally give it a text binding." : "Update the phrase, category, or binding for this snippet.";
+                        text: root.selected-id == "" ? "Save a reusable phrase and optionally give it a text binding." : (root.read-only ? "Enterprise snippets are managed centrally. Duplicate one to make a personal copy." : "Update the phrase, category, or binding for this snippet.");
                         color: ScribletTheme.text-secondary;
                         font-size: 12px;
+                        wrap: word-wrap;
                     }
 
                     Rectangle {
@@ -371,50 +440,62 @@ export component AppWindow inherits Window {
                             SectionLabel { text: "TITLE"; }
                             LineEdit {
                                 text <=> root.title-text;
+                                enabled: !root.read-only;
                                 placeholder-text: "Prior authorization approval";
                             }
 
                             SectionLabel { text: "CATEGORY"; }
-                            ComboBox {
-                                visible: root.selected-id == "";
-                                model: ["Clinical", "Administrative", "Signatures", "Personal"];
-                                current-index: root.category-text == "Clinical" ? 0 : root.category-text == "Administrative" ? 1 : root.category-text == "Signatures" ? 2 : 3;
-                                selected(value) => { root.category-text = value; }
-                            }
-                            LineEdit {
-                                visible: root.selected-id != "";
-                                text <=> root.category-text;
-                                placeholder-text: "Clinical";
+                            HorizontalBox {
+                                padding: 0px;
+                                spacing: 8px;
+                                ComboBox {
+                                    width: 220px;
+                                    enabled: !root.read-only;
+                                    model: root.categories;
+                                    current-value: root.category-text;
+                                    selected(value) => { root.category-text = value; }
+                                }
+                                LineEdit {
+                                    text <=> root.category-text;
+                                    enabled: !root.read-only;
+                                    placeholder-text: "or type a new category";
+                                    horizontal-stretch: 1;
+                                }
                             }
 
                             SectionLabel { text: "TEXT BINDING · OPTIONAL"; }
                             LineEdit {
                                 text <=> root.trigger-text;
+                                enabled: !root.read-only;
                                 placeholder-text: ";p2p";
                             }
 
                             Text {
-                                text: "Type the binding followed by space, Tab, or Enter to expand it.";
+                                text: "Type the binding followed by space, Tab, or Enter to expand it. Use {{date}}, {{clipboard}}, and {{cursor}} inside the phrase.";
                                 color: ScribletTheme.text-secondary;
                                 font-size: 10px;
+                                wrap: word-wrap;
                             }
 
                             SectionLabel { text: "PHRASE"; }
                             TextEdit {
                                 text <=> root.replacement-text;
+                                read-only: root.read-only;
                                 vertical-stretch: 1;
                             }
 
                             Rectangle { height: 1px; background: ScribletTheme.border; }
 
                             HorizontalBox {
+                                padding: 0px;
                                 spacing: 16px;
-                                CheckBox { text: "Enabled"; checked <=> root.enabled-value; }
-                                CheckBox { text: "Favorite"; checked <=> root.favorite-value; }
+                                CheckBox { text: "Enabled"; enabled: !root.read-only; checked <=> root.enabled-value; }
+                                CheckBox { text: "Favorite"; enabled: !root.read-only; checked <=> root.favorite-value; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                             }
 
                             HorizontalBox {
+                                padding: 0px;
                                 spacing: 8px;
                                 Button {
                                     visible: root.selected-id != "";
@@ -427,9 +508,19 @@ export component AppWindow inherits Window {
                                     clicked => { root.duplicate-snippet(root.selected-id); }
                                 }
                                 Button {
-                                    visible: root.selected-id != "";
+                                    visible: root.selected-id != "" && !root.read-only && !root.confirm-delete;
                                     text: "Delete";
-                                    clicked => { root.delete-snippet(root.selected-id); }
+                                    clicked => { root.confirm-delete = true; }
+                                }
+                                Button {
+                                    visible: root.confirm-delete;
+                                    text: "Confirm delete";
+                                    clicked => { root.confirm-delete = false; root.delete-snippet(root.selected-id); }
+                                }
+                                Button {
+                                    visible: root.confirm-delete;
+                                    text: "Keep";
+                                    clicked => { root.confirm-delete = false; }
                                 }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
                                 Button {
@@ -437,6 +528,8 @@ export component AppWindow inherits Window {
                                     clicked => { root.clear-form(); }
                                 }
                                 Button {
+                                    enabled: !root.read-only;
+                                    primary: true;
                                     text: root.selected-id == "" ? "Create snippet" : "Save changes";
                                     clicked => { root.save-snippet(); }
                                 }

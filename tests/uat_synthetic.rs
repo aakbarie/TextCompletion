@@ -34,7 +34,13 @@ fn generate_cases() -> Vec<SyntheticCase> {
             role: Role::Md,
             trigger,
             replacement: replacement.to_string(),
-            delimiter: if i % 3 == 0 { ' ' } else if i % 3 == 1 { '\t' } else { '\n' },
+            delimiter: if i % 3 == 0 {
+                ' '
+            } else if i % 3 == 1 {
+                '\t'
+            } else {
+                '\n'
+            },
             date: Some("09/10/2026"),
             clipboard: Some("Synthetic Member"),
         });
@@ -54,7 +60,13 @@ fn generate_cases() -> Vec<SyntheticCase> {
             role: Role::Rn,
             trigger,
             replacement: replacement.to_string(),
-            delimiter: if i % 3 == 0 { ' ' } else if i % 3 == 1 { '\t' } else { '\n' },
+            delimiter: if i % 3 == 0 {
+                ' '
+            } else if i % 3 == 1 {
+                '\t'
+            } else {
+                '\n'
+            },
             date: Some("09/10/2026"),
             clipboard: Some("Synthetic Member"),
         });
@@ -79,20 +91,45 @@ fn synthetic_uat_200_md_and_rn_cases() {
     for case in cases {
         let mut matcher = ExpansionMatcher::new(index.clone());
         for ch in case.trigger.chars() {
-            assert!(matcher.feed_char(ch).is_none(), "case {} prematurely expanded", case.id);
+            assert!(
+                matcher.feed_char(ch).is_none(),
+                "case {} prematurely expanded",
+                case.id
+            );
         }
 
         let expansion = matcher
             .feed_char(case.delimiter)
             .unwrap_or_else(|| panic!("case {} failed to match", case.id));
 
-        assert_eq!(expansion.backspaces, case.trigger.chars().count(), "case {} backspace count", case.id);
-        assert_eq!(expansion.trailing, case.delimiter, "case {} delimiter", case.id);
+        assert_eq!(
+            expansion.backspaces,
+            case.trigger.chars().count(),
+            "case {} backspace count",
+            case.id
+        );
+        assert_eq!(
+            expansion.trailing, case.delimiter,
+            "case {} delimiter",
+            case.id
+        );
 
         let rendered = render_template(&expansion.replacement, case.date, case.clipboard);
-        assert!(!rendered.text.contains("{{date}}"), "case {} date variable unresolved", case.id);
-        assert!(!rendered.text.contains("{{clipboard}}"), "case {} clipboard variable unresolved", case.id);
-        assert!(!rendered.text.contains("{{cursor}}"), "case {} cursor marker unresolved", case.id);
+        assert!(
+            !rendered.text.contains("{{date}}"),
+            "case {} date variable unresolved",
+            case.id
+        );
+        assert!(
+            !rendered.text.contains("{{clipboard}}"),
+            "case {} clipboard variable unresolved",
+            case.id
+        );
+        assert!(
+            !rendered.text.contains("{{cursor}}"),
+            "case {} cursor marker unresolved",
+            case.id
+        );
         assert!(!rendered.text.is_empty(), "case {} rendered empty", case.id);
 
         match case.role {

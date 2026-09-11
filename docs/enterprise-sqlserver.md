@@ -1,60 +1,77 @@
 # Scriblet Enterprise SQL Server Sync
 
-Scriblet v0.4 can synchronize an enterprise phrase library directly from SQL Server on Windows using ODBC and Windows Integrated Authentication. SQL Server is never queried during text expansion. Approved content is synchronized into the existing local SQLite database and the in-memory binding index continues to serve expansions locally.
+Scriblet can synchronize an enterprise phrase library from SQL Server on Windows using ODBC and
+Windows Integrated Authentication. SQL Server is never queried during text expansion. Approved
+content is synchronized into the local SQLite database, and the in-memory binding index keeps
+serving expansions locally.
 
-## Alliance deployment defaults
+## Enabling sync
 
-The current Alliance reporting environment is configured as:
+Sync is off until both of these environment variables are set for the user or machine:
 
 ```text
-Driver={SQL Server}
-Server=RPTPRODDB
-Port=1433
-Database=Alliance_RPT
-Trusted_Connection=Yes
-Encrypt=Yes
-TrustServerCertificate=No
+SCRIBLET_SQL_SERVER=<server host>
+SCRIBLET_SQL_DATABASE=<database name>
 ```
 
-Scriblet uses these as Windows defaults in v0.4. Environment variables can override them for other environments.
+Scriblet ships no built-in server or database names. Set the variables through Group Policy,
+Intune, a login script, or per-user environment settings.
 
-## Client prerequisites
-
-- Windows machine joined to the appropriate domain or otherwise able to authenticate to SQL Server with the logged-in Windows identity
-- `SQL Server` ODBC driver installed
-- Network path to `RPTPRODDB:1433`
-- SELECT permission on `dbo.ScribletSnippets` and `dbo.ScribletBindings`
-
-## Deployment configuration
-
-Optional overrides:
+Optional settings and their defaults:
 
 ```text
 SCRIBLET_ENTERPRISE_ENABLED=true
-SCRIBLET_SQL_SERVER=RPTPRODDB
 SCRIBLET_SQL_PORT=1433
-SCRIBLET_SQL_DATABASE=Alliance_RPT
-SCRIBLET_ODBC_DRIVER=SQL Server
+SCRIBLET_ODBC_DRIVER=ODBC Driver 18 for SQL Server
 SCRIBLET_SQL_ENCRYPT=true
 SCRIBLET_SQL_TRUST_SERVER_CERTIFICATE=false
+SCRIBLET_SQL_LOGIN_TIMEOUT_SECONDS=5
 ```
 
-The generated connection string is equivalent to:
+The generated connection string is:
 
 ```text
-Driver={SQL Server};Server=RPTPRODDB,1433;Database=Alliance_RPT;Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=No;
+Driver={ODBC Driver 18 for SQL Server};Server=<host>,<port>;Database=<database>;Trusted_Connection=Yes;Encrypt=Yes;TrustServerCertificate=No;
 ```
 
-Scriblet does not store SQL usernames or passwords. Set `SCRIBLET_ENTERPRISE_ENABLED=false` to disable enterprise synchronization while retaining the local personal library.
+Scriblet does not store SQL usernames or passwords. Set `SCRIBLET_ENTERPRISE_ENABLED=false` to
+disable synchronization while keeping the personal library.
+
+## Client prerequisites
+
+- Windows machine able to authenticate to SQL Server with the logged-in Windows identity
+- Microsoft ODBC Driver 18 for SQL Server installed (or another driver named in `SCRIBLET_ODBC_DRIVER`)
+- Network path to the server and port
+- SELECT permission on `dbo.ScribletSnippets` and `dbo.ScribletBindings`
+
+Driver 18 requires a trusted certificate when `Encrypt=Yes`. For a server with a self-signed
+certificate, either install the certificate on clients or set
+`SCRIBLET_SQL_TRUST_SERVER_CERTIFICATE=true`.
+
+## Sync behaviour
+
+- Sync runs on a background thread when Scriblet starts and again when the user clicks
+  **Sync enterprise library**. The window is usable while it runs.
+- The whole sync is one SQLite transaction. If the server is unreachable or a row is invalid,
+  the previously cached library stays intact.
+- Enterprise snippets that disappear from the server are removed from the cache.
+- Personal snippets are never modified. If an enterprise binding uses the same text as a
+  personal binding, the personal binding wins, the enterprise binding is skipped, and the skip
+  is listed in the status badge and the log.
+- Enterprise snippets are read-only in the editor. Users can duplicate them into personal copies.
+- The login timeout keeps an off-network laptop from waiting long; the status badge reports
+  "Offline · using cached enterprise library" with the reason.
 
 ## Server schema
 
-Run `docs/sqlserver-schema.sql` in `Alliance_RPT`. Normal Scriblet clients should receive SELECT permission only. Content publishing should be performed through a separate administrative process or controlled database role.
+Run `docs/sqlserver-schema.sql` in the target database. Normal Scriblet clients should receive
+SELECT permission only. Publish content through a separate administrative process or a
+controlled database role.
 
-## Offline behavior
-
-At startup Scriblet attempts an enterprise synchronization. If SQL Server cannot be reached, the last synchronized enterprise library remains in SQLite and continues to work. Personal snippets are not removed or overwritten during enterprise synchronization.
+Only `kind = 'text'` bindings are supported. The column is reserved for future binding kinds.
 
 ## Privacy boundary
 
-The synchronization query reads only centrally managed snippet content and bindings. Scriblet does not send typed keystrokes, clipboard history, expansion events, telemetry, or PHI to SQL Server.
+The synchronization query reads only centrally managed snippet content and bindings. Scriblet
+does not send typed keystrokes, clipboard history, expansion events, telemetry, or PHI to SQL
+Server. The local log records sync results and hook status, never typed text.

@@ -1,9 +1,21 @@
-pub mod binding;
+//! Scriblet core library.
+//!
+//! Everything that does not need a window lives here so it can be unit tested
+//! on any host: the snippet model, SQLite storage, the expansion matcher,
+//! template rendering, enterprise synchronization, import/export, and the
+//! platform runtime that hooks the keyboard.
+
+pub mod app;
+pub mod autostart;
 pub mod enterprise;
 pub mod expansion;
 pub mod model;
+pub mod runtime;
 pub mod storage;
 pub mod template;
+pub mod transfer;
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-pub mod runtime;
+/// Application name used for data directories, logs, and OS registration.
+pub const APP_NAME: &str = "Scriblet";
+/// Semantic version of the running build, sourced from Cargo.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");

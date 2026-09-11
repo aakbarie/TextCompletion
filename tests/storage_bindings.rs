@@ -21,7 +21,8 @@ fn text_binding_is_separate_and_resolves_snippet() {
     let repo = SqliteSnippetRepository::open(dir.path().join("scriblet.db")).unwrap();
     let snippet = Snippet::personal("", "Peer to peer approved");
     repo.upsert(&snippet).unwrap();
-    repo.upsert_binding(&Binding::text(snippet.id, ";p2p")).unwrap();
+    repo.upsert_binding(&Binding::text(snippet.id, ";p2p"))
+        .unwrap();
 
     let found = repo.find_by_trigger(";p2p").unwrap().unwrap();
     assert_eq!(found.id, snippet.id);
@@ -36,7 +37,8 @@ fn duplicate_binding_is_detected() {
     let second = Snippet::personal("", "Second");
     repo.upsert(&first).unwrap();
     repo.upsert(&second).unwrap();
-    repo.upsert_binding(&Binding::text(first.id, ";same")).unwrap();
+    repo.upsert_binding(&Binding::text(first.id, ";same"))
+        .unwrap();
 
     assert!(repo.binding_collision(";same", Some(second.id)).unwrap());
     assert!(!repo.binding_collision(";same", Some(first.id)).unwrap());

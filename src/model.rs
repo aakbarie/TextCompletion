@@ -18,7 +18,7 @@ impl SnippetScope {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value {
             "shared" => Self::Shared,
             "enterprise" => Self::Enterprise,
@@ -27,29 +27,27 @@ impl SnippetScope {
     }
 }
 
+/// How a binding is invoked. Only text triggers are implemented today; the
+/// `kind` column stays in both schemas so other kinds can be added later
+/// without a migration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BindingKind {
     Text,
-    Hotkey,
 }
 
 impl BindingKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Text => "text",
-            Self::Hotkey => "hotkey",
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
-        match value {
-            "hotkey" => Self::Hotkey,
-            _ => Self::Text,
-        }
+    pub fn parse(_value: &str) -> Self {
+        Self::Text
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Binding {
     pub id: Uuid,
     pub snippet_id: Uuid,
@@ -70,7 +68,7 @@ impl Binding {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Snippet {
     pub id: Uuid,
     pub title: String,
@@ -99,6 +97,10 @@ impl Snippet {
             version: 1,
             updated_at: now_epoch_seconds(),
         }
+    }
+
+    pub fn is_enterprise(&self) -> bool {
+        self.scope == SnippetScope::Enterprise
     }
 }
 
