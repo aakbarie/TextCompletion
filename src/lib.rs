@@ -11,10 +11,10 @@ pub mod enterprise;
 pub mod expansion;
 pub mod instance;
 pub mod model;
-#[path = "runtime.rs"]
-mod runtime_legacy;
 #[path = "runtime_winfix.rs"]
 pub mod runtime;
+#[path = "runtime.rs"]
+mod runtime_legacy;
 pub mod storage;
 pub mod template;
 pub mod transfer;
