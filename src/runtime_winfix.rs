@@ -6,7 +6,9 @@
 //! virtual-key events for ASCII text. This avoids relying on a long stream of
 //! VK_PACKET / KEYEVENTF_UNICODE events for ordinary clinical text.
 
+#[cfg(target_os = "windows")]
 use crate::expansion::SharedSnippetIndex;
+#[cfg(target_os = "windows")]
 use std::thread;
 
 pub use crate::runtime_legacy::{
@@ -244,9 +246,6 @@ mod windows {
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
 
-        // A matched delimiter is suppressed on key-down, but the replacement is
-        // not queued until the corresponding physical key-up. This guarantees
-        // that no synthetic typing starts while Space/Tab/Enter is still held.
         if up {
             if state
                 .armed
@@ -266,7 +265,6 @@ mod windows {
             return CallNextHookEx(null_mut(), code, wparam, lparam);
         }
 
-        // Auto-repeat for a held delimiter must remain suppressed while armed.
         if state
             .armed
             .as_ref()
@@ -313,8 +311,6 @@ mod windows {
         };
 
         if let Some(delimiter) = delimiter {
-            // Shift+Enter/Tab/Space has application-specific meaning. Do not
-            // convert it into a text expansion.
             if state.modifiers.shift() {
                 state.matcher.reset();
                 return CallNextHookEx(null_mut(), code, wparam, lparam);
@@ -431,9 +427,6 @@ mod windows {
         }
     }
 
-    /// Build one uninterrupted input batch. Ordinary ASCII text uses normal
-    /// virtual keys instead of VK_PACKET. Unicode is retained only as a
-    /// fallback for characters that do not have a direct US-keyboard mapping.
     fn build_inputs(plan: &InjectionPlan, caps_lock: bool) -> Vec<INPUT> {
         let mut inputs = Vec::new();
 
@@ -472,8 +465,6 @@ mod windows {
         }
     }
 
-    /// Maps common text to real keyboard keys. Letter case accounts for Caps
-    /// Lock so the emitted character remains deterministic.
     fn ascii_key(ch: char, caps_lock: bool) -> Option<(u16, bool)> {
         if ch.is_ascii_alphabetic() {
             let upper = ch.is_ascii_uppercase();
