@@ -17,9 +17,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: hotfix-v0.5.3-windows-input
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Update lockfile
-        run: cargo check
+      - name: Match workspace version in Cargo.lock
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          manifest = Path("Cargo.toml").read_text()
+          version = re.search(r'^version = "([^"]+)"', manifest, re.M).group(1)
+
+          path = Path("Cargo.lock")
+          lock = path.read_text()
+          pattern = r'(\[\[package\]\]\nname = "textcompletion"\nversion = ")[^"]+("\n)'
+          updated, count = re.subn(pattern, rf'\g<1>{version}\2', lock, count=1)
+          if count != 1:
+              raise SystemExit("Could not find textcompletion package entry")
+          path.write_text(updated)
       - name: Commit lockfile
         shell: bash
         run: |
