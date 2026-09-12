@@ -2,6 +2,17 @@
 
 All notable changes to Scriblet are recorded here. Versions follow semantic versioning.
 
+## [0.5.3] - 2026-09-11
+
+Windows input-engine hotfix based on live desktop reproduction of corrupted expansions in a single Scriblet process.
+
+### Fixed
+- **ASCII replacement text now uses normal Windows virtual-key input rather than a stream of VK_PACKET / KEYEVENTF_UNICODE events.** Common clinical text, numbers, spaces, and punctuation are emitted as ordinary key presses; Unicode input remains only as a fallback for characters that cannot be represented directly.
+- **Expansion injection waits for the physical delimiter key-up.** The matched Space, Tab, or Enter key-down is suppressed, but the replacement is not sent until that physical key has been released. This prevents synthetic input from beginning while the activating delimiter is still held.
+- Held activating delimiters are suppressed through auto-repeat until key-up.
+- Shift+Enter, Shift+Tab, and Shift+Space are left to the target application instead of being converted into text expansions.
+- Windows expansion diagnostics record only event counts and errors, never snippet text or typed keystrokes.
+
 ## [0.5.2] - 2026-09-11
 
 Windows upgrade hotfix. This release also includes the v0.5.1 correctness fixes, which were merged to main but did not receive a standalone GitHub release.

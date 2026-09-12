@@ -11,7 +11,11 @@ pub mod enterprise;
 pub mod expansion;
 pub mod instance;
 pub mod model;
+#[path = "runtime_winfix.rs"]
 pub mod runtime;
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[path = "runtime.rs"]
+mod runtime_legacy;
 pub mod storage;
 pub mod template;
 pub mod transfer;
