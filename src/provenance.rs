@@ -82,20 +82,21 @@ impl ProvenanceStore {
     /// Append-only by API design. There is deliberately no update or delete
     /// method; correction is represented by a later semantic event.
     pub fn append(&self, event: &ProvenanceEvent) -> Result<()> {
+        let id = event.id.to_string();
         self.conn.execute(
             "INSERT INTO events
              (id, event_type, note_id, actor, provider, model, content_hash, metadata_json, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
-                event.id.to_string(),
-                event.event_type,
-                event.note_id,
-                event.actor,
-                event.provider,
-                event.model,
-                event.content_hash,
-                event.metadata_json,
-                event.created_at,
+                id,
+                &event.event_type,
+                event.note_id.as_deref(),
+                &event.actor,
+                event.provider.as_deref(),
+                event.model.as_deref(),
+                event.content_hash.as_deref(),
+                event.metadata_json.as_deref(),
+                &event.created_at,
             ],
         )?;
         Ok(())
