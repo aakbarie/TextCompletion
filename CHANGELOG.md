@@ -2,6 +2,16 @@
 
 All notable changes to Scriblet are recorded here. Versions follow semantic versioning.
 
+## [0.5.4] - 2026-09-13
+
+macOS hotfix. v0.5.3 crashed on the first keystroke on macOS 14 and later, on both Intel and Apple Silicon.
+
+### Fixed
+- **macOS no longer crashes with `SIGILL` on the first keystroke.** The `rdev` hook decoded every key with the Text Input Source API inside the event tap callback; since macOS 14 that API asserts it is on the main thread. Scriblet now installs a CoreGraphics event tap directly and reads the typed character from the event itself, which is safe on the hook thread. `rdev` is no longer a dependency.
+- **Accessibility permission is picked up without a relaunch.** When permission is missing, Scriblet shows the system prompt, keeps the "Grant Accessibility permission" status visible, and starts expanding the moment the toggle is switched on. Previously the hook was attempted immediately, failed with `EventTapError`, overwrote the guidance in the header, and never retried.
+- macOS app bundles are ad-hoc code-signed in the release workflow. The Intel bundle was completely unsigned (the linker only auto-signs arm64), which made the Accessibility grant fragile and triggered App Translocation.
+- macOS engine parity with the v0.5.3 Windows engine: synthetic input is stamped with a marker instead of a global flag, Shift+Space/Tab/Enter are left to the target application, a swallowed delimiter's auto-repeats are swallowed until key-up, and the tap re-enables itself if macOS disables it.
+
 ## [0.5.3] - 2026-09-11
 
 Windows input-engine hotfix based on live desktop reproduction of corrupted expansions in a single Scriblet process.

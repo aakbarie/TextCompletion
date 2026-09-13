@@ -79,7 +79,7 @@ src/storage.rs         SQLite repository with transactions and versioned migrati
 src/expansion.rs       In-memory trigger index and matcher (platform independent)
 src/template.rs        {{date}}, {{clipboard}}, {{cursor}} rendering
 src/runtime.rs         Keyboard hook and injection: Windows (WH_KEYBOARD_LL + SendInput),
-                       macOS (rdev + enigo), stub elsewhere
+                       macOS (CGEventTap + enigo), stub elsewhere
 src/enterprise.rs      Enterprise sync and the SQL Server source
 src/transfer.rs        JSON import/export
 src/autostart.rs       Start-at-login registration

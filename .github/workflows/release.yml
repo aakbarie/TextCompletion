@@ -119,6 +119,10 @@ jobs:
           cp target/${{ matrix.target }}/release/scriblet dist/Scriblet.app/Contents/MacOS/scriblet
           chmod +x dist/Scriblet.app/Contents/MacOS/scriblet
           cp packaging/macos/Info.plist dist/Scriblet.app/Contents/Info.plist
+          # Ad-hoc signature: the linker only auto-signs arm64, and an unsigned
+          # bundle gets a fragile TCC identity and App Translocation.
+          codesign --force --deep --sign - dist/Scriblet.app
+          codesign --verify --verbose dist/Scriblet.app
           ditto -c -k --sequesterRsrc --keepParent dist/Scriblet.app "dist/Scriblet-macOS-${{ matrix.name }}.zip"
           test -s "dist/Scriblet-macOS-${{ matrix.name }}.zip"
       - uses: actions/upload-artifact@v4

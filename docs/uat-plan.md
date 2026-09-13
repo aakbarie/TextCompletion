@@ -26,7 +26,7 @@ Build under test: `Scriblet.exe` or `Scriblet.app` from the release workflow, no
 | # | Step | Expected |
 |---|------|----------|
 | A1 | Launch Scriblet | Window opens. Header shows "Expansion active" with a green dot within a second. Status badge says "Ready · enterprise sync not configured" (Windows, no env) or "Ready · enterprise sync configured". |
-| A2 | macOS only: first launch without Accessibility | Header shows "Grant Accessibility permission to enable expansion" and the system prompt appears. After granting and relaunching, A1 applies. |
+| A2 | macOS only: first launch without Accessibility | Header shows "Grant Accessibility permission to enable expansion" and the system prompt appears. Within a second of granting, without relaunching, the header switches to "Expansion active" and A1 applies. |
 | A3 | Launch Scriblet a second time while it is running | A dialog "Scriblet is already running" appears and the second process exits. No second tray icon. |
 | A4 | Look at the data directory | `scriblet.db`, `scriblet.lock`, and `scriblet.log` exist. The log records the version and "low-level keyboard hook installed" (Windows). |
 
