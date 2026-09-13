@@ -60,13 +60,13 @@ impl WriterSession {
 
     pub fn replace_body(&mut self, body: impl Into<String>) -> Result<()> {
         self.completion.cancel();
-        self.current_mut()?.body = body.into();
+        self.require_current_mut()?.body = body.into();
         Ok(())
     }
 
     pub fn save(&mut self) -> Result<()> {
         self.completion.cancel();
-        let note = self.current()?.clone();
+        let note = self.require_current()?.clone();
         self.workspace.save_note(&note)?;
         self.provenance.append(
             &ProvenanceEvent::new("note.saved", "human").with_note(note.id.0.clone()),
@@ -77,10 +77,10 @@ impl WriterSession {
 
     pub fn rename(&mut self, new_name: &str) -> Result<()> {
         self.completion.cancel();
-        let old_path = self.current()?.path.to_string_lossy().to_string();
+        let old_path = self.require_current()?.path.to_string_lossy().to_string();
         let workspace = self.workspace.clone();
-        workspace.rename_note(self.current_mut()?, new_name)?;
-        let note = self.current()?;
+        workspace.rename_note(self.require_current_mut()?, new_name)?;
+        let note = self.require_current()?;
         let metadata = serde_json::json!({
             "from": old_path,
             "to": note.path.to_string_lossy()
@@ -95,7 +95,7 @@ impl WriterSession {
 
     pub fn delete_current(&mut self) -> Result<()> {
         self.completion.cancel();
-        let note = self.current()?.clone();
+        let note = self.require_current()?.clone();
         self.workspace.delete_note(&note)?;
         self.provenance.append(
             &ProvenanceEvent::new("note.deleted", "human").with_note(note.id.0.clone()),
@@ -112,7 +112,7 @@ impl WriterSession {
     /// Request an inline proposal for the exact caret position. The proposal is
     /// held outside the Markdown until `accept_completion` is called.
     pub fn request_completion(&mut self, cursor_byte: usize) -> Result<Option<&CompletionCandidate>> {
-        let note = self.current()?.clone();
+        let note = self.require_current()?.clone();
         validate_cursor(&note.body, cursor_byte)?;
         let request = CompletionRequest::new(
             note.id.clone(),
@@ -134,11 +134,12 @@ impl WriterSession {
     }
 
     pub fn accept_completion(&mut self, cursor_byte: usize) -> Result<String> {
-        let note_id = self.current()?.id.0.clone();
-        validate_cursor(&self.current()?.body, cursor_byte)?;
+        let note_id = self.require_current()?.id.0.clone();
+        validate_cursor(&self.require_current()?.body, cursor_byte)?;
         let candidate = self.completion.accept().context("no visible completion to accept")?;
-        self.current_mut()?.body.insert_str(cursor_byte, &candidate.text);
-        self.workspace.save_note(self.current()?)?;
+        self.require_current_mut()?.body.insert_str(cursor_byte, &candidate.text);
+        let note = self.require_current()?.clone();
+        self.workspace.save_note(&note)?;
         self.provenance.append(
             &ProvenanceEvent::new("completion.accepted", "human")
                 .with_note(note_id)
@@ -152,7 +153,7 @@ impl WriterSession {
         let Some(candidate) = self.completion.reject() else {
             return Ok(false);
         };
-        let note_id = self.current()?.id.0.clone();
+        let note_id = self.require_current()?.id.0.clone();
         let mut event = ProvenanceEvent::new("completion.rejected", "human").with_note(note_id);
         event.provider = Some(candidate.provider);
         event.model = Some(candidate.model);
@@ -164,11 +165,11 @@ impl WriterSession {
         self.completion.cancel();
     }
 
-    fn current(&self) -> Result<&NoteDocument> {
+    fn require_current(&self) -> Result<&NoteDocument> {
         self.current.as_ref().context("no note is open")
     }
 
-    fn current_mut(&mut self) -> Result<&mut NoteDocument> {
+    fn require_current_mut(&mut self) -> Result<&mut NoteDocument> {
         self.current.as_mut().context("no note is open")
     }
 }
