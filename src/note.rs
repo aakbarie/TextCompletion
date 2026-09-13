@@ -5,12 +5,21 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Stable identity for a note inside a Scriblet workspace.
+/// New Scriblet notes persist a UUID in front matter. Existing plain Markdown
+/// gets a deterministic path-derived identity without being rewritten.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NoteId(pub Uuid);
+pub struct NoteId(pub String);
 
 impl NoteId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self(Uuid::new_v4().to_string())
+    }
+
+    fn for_existing(path: &Path, front_matter: Option<&str>) -> Self {
+        if let Some(id) = front_matter.and_then(front_matter_id) {
+            return Self(id.to_string());
+        }
+        Self(format!("path:{:016x}", path_fingerprint(path)))
     }
 }
 
@@ -36,8 +45,9 @@ impl NoteDocument {
         let path = path.into();
         validate_markdown_path(&path)?;
         let (front_matter, body) = split_front_matter(markdown);
+        let id = NoteId::for_existing(&path, front_matter.as_deref());
         Ok(Self {
-            id: NoteId::new(),
+            id,
             path,
             front_matter,
             body,
@@ -48,13 +58,15 @@ impl NoteDocument {
         let path = path.into();
         validate_markdown_path(&path)?;
         let title = if title.trim().is_empty() { "Untitled" } else { title.trim() };
+        let id = NoteId::new();
         let metadata = format!(
-            "type: note\nschema: scriblet/note/v1\ncreated: {}\nupdated: {}",
+            "id: {}\ntype: note\nschema: scriblet/note/v1\ncreated: {}\nupdated: {}",
+            id.0,
             now.to_rfc3339(),
             now.to_rfc3339()
         );
         Ok(Self {
-            id: NoteId::new(),
+            id,
             path,
             front_matter: Some(metadata),
             body: format!("# {title}\n\n"),
@@ -90,6 +102,24 @@ pub fn validate_markdown_path(path: &Path) -> Result<()> {
         bail!("Scriblet notes must use the .md extension");
     }
     Ok(())
+}
+
+fn front_matter_id(front: &str) -> Option<&str> {
+    front.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "id")
+            .then(|| value.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn path_fingerprint(path: &Path) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// Split optional YAML front matter while preserving both halves verbatim.
@@ -150,10 +180,21 @@ mod tests {
     }
 
     #[test]
-    fn new_note_uses_open_markdown_with_optional_metadata() {
+    fn new_note_identity_survives_reopen() {
         let now = Utc.with_ymd_and_hms(2026, 9, 13, 20, 0, 0).unwrap();
         let note = NoteDocument::new("notes/idea.md", "Idea", now).unwrap();
+        let reopened = NoteDocument::from_markdown("notes/idea.md", &note.markdown()).unwrap();
+        assert_eq!(note.id, reopened.id);
         assert!(note.markdown().contains("schema: scriblet/note/v1"));
         assert!(note.markdown().ends_with("# Idea\n\n"));
+    }
+
+    #[test]
+    fn existing_plain_markdown_gets_stable_non_mutating_identity() {
+        let source = "# Existing\n";
+        let first = NoteDocument::from_markdown("notes/existing.md", source).unwrap();
+        let second = NoteDocument::from_markdown("notes/existing.md", source).unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.markdown(), source);
     }
 }
