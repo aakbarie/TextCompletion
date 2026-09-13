@@ -104,12 +104,21 @@ pub fn split_front_matter(markdown: &str) -> (Option<String>, String) {
     let rest = &normalized[first_newline..];
     let mut offset = first_newline;
     for segment in rest.split_inclusive('\n') {
-        let line = segment.trim_end_matches(['\r', '\n']);
+        let line = segment.trim_end_matches(|c| c == '\r' || c == '\n');
         if line == "---" {
             let front = &normalized[first_newline..offset];
             let body_start = offset + segment.len();
-            let body = normalized[body_start..].strip_prefix('\n').unwrap_or(&normalized[body_start..]);
-            return (Some(front.trim_end_matches(['\r', '\n']).to_string()), body.to_string());
+            let body = normalized[body_start..]
+                .strip_prefix('\n')
+                .unwrap_or(&normalized[body_start..]);
+            return (
+                Some(
+                    front
+                        .trim_end_matches(|c| c == '\r' || c == '\n')
+                        .to_string(),
+                ),
+                body.to_string(),
+            );
         }
         offset += segment.len();
     }
