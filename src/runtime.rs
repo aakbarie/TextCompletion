@@ -1,11 +1,10 @@
 //! Global keyboard binding: watches typed text in every application, detects
 //! a trigger followed by a delimiter, and replaces it with the rendered phrase.
 //!
-//! Windows uses a native `WH_KEYBOARD_LL` hook rather than rdev. rdev derives
-//! `Event.name` inside the low-level hook using the ambient keyboard state,
-//! which can lag the current event. Scriblet only needs a small ASCII trigger
-//! alphabet, so Windows decodes the current vkCode directly and ignores
-//! injected events explicitly.
+//! Both desktop platforms hook the keyboard natively. Windows uses a
+//! `WH_KEYBOARD_LL` hook and decodes the current vkCode directly; macOS uses a
+//! CoreGraphics event tap and reads the typed character from the event. Both
+//! ignore their own injected events explicitly.
 
 use crate::expansion::{Expansion, SharedSnippetIndex};
 use crate::template::{cursor_left_presses, render_now, RenderedTemplate};
@@ -689,34 +688,70 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use super::*;
-    use crate::expansion::ExpansionMatcher;
-    use enigo::{Direction, Enigo, Key as EnigoKey, Keyboard, Settings};
-    use rdev::{grab, Event, EventType, Key};
-    use std::sync::atomic::Ordering;
-    use std::sync::Mutex;
+    //! macOS uses a CoreGraphics event tap directly. Earlier versions went
+    //! through rdev, which decodes every key inside the tap callback with the
+    //! Text Input Source API. Since macOS 14 that API asserts it is on the main
+    //! thread, so the first keystroke killed the process with SIGILL. The tap
+    //! reads the typed character from the event itself instead, which is safe
+    //! on the hook thread.
 
-    #[derive(Default)]
-    struct Modifiers {
-        control: bool,
-        alt: bool,
-        meta: bool,
+    use super::*;
+    use crate::expansion::{Expansion, ExpansionMatcher};
+    use core_foundation::base::TCFType;
+    use core_foundation::mach_port::CFMachPortRef;
+    use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+    use core_graphics::event::{
+        CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventTapProxy, CGEventType, CallbackResult, EventField,
+    };
+    use core_graphics::sys::CGEventRef;
+    use enigo::{Direction, Enigo, Key as EnigoKey, Keyboard, Settings};
+    use foreign_types::ForeignType;
+    use macos_accessibility_client::accessibility::{
+        application_is_trusted, application_is_trusted_with_prompt,
+    };
+    use std::ffi::{c_ulong, c_void};
+    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// Stamped on every synthetic event so the tap passes its own input through.
+    const SCRIBLET_EVENT_MARKER: i64 = 0x5343_5242; // "SCRB"
+
+    // Virtual key codes from HIToolbox Events.h (kVK_*). Layout independent.
+    const KEY_RETURN: i64 = 0x24;
+    const KEY_TAB: i64 = 0x30;
+    const KEY_SPACE: i64 = 0x31;
+    const KEY_DELETE: i64 = 0x33;
+    const KEY_ESCAPE: i64 = 0x35;
+    const KEY_KEYPAD_ENTER: i64 = 0x4C;
+    const KEY_HOME: i64 = 0x73;
+    const KEY_PAGE_UP: i64 = 0x74;
+    const KEY_FORWARD_DELETE: i64 = 0x75;
+    const KEY_END: i64 = 0x77;
+    const KEY_PAGE_DOWN: i64 = 0x79;
+    const KEY_LEFT: i64 = 0x7B;
+    const KEY_RIGHT: i64 = 0x7C;
+    const KEY_DOWN: i64 = 0x7D;
+    const KEY_UP: i64 = 0x7E;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventKeyboardGetUnicodeString(
+            event: CGEventRef,
+            max_length: c_ulong,
+            actual_length: *mut c_ulong,
+            unicode_string: *mut u16,
+        );
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     }
 
-    impl Modifiers {
-        fn shortcut(&self) -> bool {
-            self.control || self.alt || self.meta
-        }
-
-        fn apply(&mut self, key: Key, down: bool) -> bool {
-            match key {
-                Key::ControlLeft | Key::ControlRight => self.control = down,
-                Key::Alt | Key::AltGr => self.alt = down,
-                Key::MetaLeft | Key::MetaRight => self.meta = down,
-                _ => return false,
-            }
-            true
-        }
+    /// Everything the tap callback mutates, behind one lock.
+    struct State {
+        matcher: ExpansionMatcher,
+        /// A delimiter whose key-down was swallowed. Its auto-repeats are
+        /// swallowed too until the physical key comes back up.
+        suppressed_key: Option<i64>,
     }
 
     pub fn spawn(
@@ -724,154 +759,278 @@ mod imp {
         paused: PauseFlag,
         status: StatusCallback,
     ) -> thread::JoinHandle<()> {
-        let matcher = Arc::new(Mutex::new(ExpansionMatcher::new(index)));
-        let injecting = Arc::new(AtomicBool::new(false));
-        let modifiers = Arc::new(Mutex::new(Modifiers::default()));
-        let pending = Arc::new(PendingExpansion::default());
-
         thread::spawn(move || {
-            if !macos_accessibility_client::accessibility::application_is_trusted_with_prompt() {
-                log::warn!("accessibility permission not granted; keyboard grab may fail");
-                status(RuntimeStatus::PermissionRequired);
+            if !wait_for_accessibility(&status) {
+                status(RuntimeStatus::Failed(
+                    "Accessibility permission was not granted".to_string(),
+                ));
+                return;
             }
 
-            let status_for_callback = status.clone();
-            let reported_active = Arc::new(AtomicBool::new(false));
-            let callback = move |event: Event| -> Option<Event> {
-                if !reported_active.swap(true, Ordering::AcqRel) {
-                    status_for_callback(RuntimeStatus::Active);
-                }
+            let state = Arc::new(Mutex::new(State {
+                matcher: ExpansionMatcher::new(index),
+                suppressed_key: None,
+            }));
+            let pending = Arc::new(PendingExpansion::default());
 
-                if injecting.load(Ordering::Acquire) {
-                    return Some(event);
-                }
-
-                let (key, down) = match event.event_type {
-                    EventType::KeyPress(key) => (key, true),
-                    EventType::KeyRelease(key) => (key, false),
-                    EventType::ButtonPress(_) => {
-                        // A click moves the caret: the partial trigger is stale
-                        // and a pending replacement would land in the wrong place.
-                        pending.note_interruption();
-                        if let Ok(mut matcher) = matcher.lock() {
-                            matcher.reset();
-                        }
-                        return Some(event);
-                    }
-                    _ => return Some(event),
-                };
-
-                let is_shortcut = {
-                    let mut modifiers = modifiers.lock().ok()?;
-                    if modifiers.apply(key, down) {
-                        if down {
-                            if let Ok(mut matcher) = matcher.lock() {
-                                matcher.reset();
-                            }
-                        }
-                        return Some(event);
-                    }
-                    modifiers.shortcut()
-                };
-
-                if !down {
-                    return Some(event);
-                }
-
-                if pending.note_interruption() {
-                    if let Ok(mut matcher) = matcher.lock() {
-                        matcher.reset();
-                    }
-                    return Some(event);
-                }
-
-                if paused.load(Ordering::Relaxed) || is_shortcut {
-                    if let Ok(mut matcher) = matcher.lock() {
-                        matcher.reset();
-                    }
-                    return Some(event);
-                }
-
-                match key {
-                    Key::Backspace => {
-                        if let Ok(mut matcher) = matcher.lock() {
-                            matcher.backspace();
-                        }
-                        Some(event)
-                    }
-                    Key::Space => handle_delimiter(event, ' ', &matcher, &injecting, &pending),
-                    Key::Tab => handle_delimiter(event, '\t', &matcher, &injecting, &pending),
-                    Key::Return => handle_delimiter(event, '\n', &matcher, &injecting, &pending),
-                    _ => {
-                        let mut handled = false;
-                        if let Some(name) = event.name.as_deref() {
-                            let mut chars = name.chars();
-                            if let (Some(ch), None) = (chars.next(), chars.next()) {
-                                if !ch.is_control() {
-                                    if let Ok(mut matcher) = matcher.lock() {
-                                        let _ = matcher.feed_char(ch);
-                                    }
-                                    handled = true;
-                                }
-                            }
-                        }
-                        if !handled {
-                            if let Ok(mut matcher) = matcher.lock() {
-                                matcher.reset();
-                            }
-                        }
-                        Some(event)
-                    }
-                }
-            };
-
-            if let Err(error) = grab(callback) {
-                log::error!("keyboard grab failed: {error:?}");
-                status(RuntimeStatus::Failed(format!("{error:?}")));
+            if let Err(reason) = run_tap(state, pending, paused, &status) {
+                log::error!("keyboard event tap failed: {reason}");
+                status(RuntimeStatus::Failed(reason));
             }
         })
     }
 
-    fn handle_delimiter(
-        event: Event,
-        delimiter: char,
-        matcher: &Arc<Mutex<ExpansionMatcher>>,
-        injecting: &Arc<AtomicBool>,
-        pending: &Arc<PendingExpansion>,
-    ) -> Option<Event> {
-        let expansion = matcher
-            .lock()
-            .ok()
-            .and_then(|mut matcher| matcher.feed_char(delimiter));
+    /// Blocks until the process is trusted for Accessibility, showing the
+    /// system prompt once. Returns `false` if Scriblet should give up.
+    fn wait_for_accessibility(status: &StatusCallback) -> bool {
+        if application_is_trusted_with_prompt() {
+            return true;
+        }
+        log::warn!("accessibility permission not granted; waiting for the user");
+        status(RuntimeStatus::PermissionRequired);
 
-        let Some(expansion) = expansion else {
-            return Some(event);
+        // The window already tells the user what to do, so keep polling until
+        // they flip the toggle. Expansion then starts without a relaunch.
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            if application_is_trusted() {
+                log::info!("accessibility permission granted");
+                return true;
+            }
+        }
+    }
+
+    /// Installs the tap on this thread's run loop and services it forever.
+    fn run_tap(
+        state: Arc<Mutex<State>>,
+        pending: Arc<PendingExpansion>,
+        paused: PauseFlag,
+        status: &StatusCallback,
+    ) -> Result<(), String> {
+        // The tap re-enables itself if macOS disables it for being slow, so
+        // the callback needs the port. It is filled in once the tap exists.
+        let port = Arc::new(AtomicPtr::<c_void>::new(std::ptr::null_mut()));
+        let port_for_callback = Arc::clone(&port);
+
+        let callback = move |_proxy: CGEventTapProxy,
+                             event_type: CGEventType,
+                             event: &CGEvent|
+              -> CallbackResult {
+            handle_event(
+                event_type,
+                event,
+                &state,
+                &pending,
+                &paused,
+                &port_for_callback,
+            )
         };
 
+        let tap = CGEventTap::new(
+            CGEventTapLocation::HID,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            vec![
+                CGEventType::KeyDown,
+                CGEventType::KeyUp,
+                CGEventType::FlagsChanged,
+                CGEventType::LeftMouseDown,
+                CGEventType::RightMouseDown,
+                CGEventType::OtherMouseDown,
+            ],
+            callback,
+        )
+        .map_err(|()| "CGEventTapCreate returned NULL".to_string())?;
+
+        port.store(
+            tap.mach_port().as_concrete_TypeRef() as *mut c_void,
+            Ordering::Release,
+        );
+        let source = tap
+            .mach_port()
+            .create_runloop_source(0)
+            .map_err(|()| "could not create run loop source for the event tap".to_string())?;
+        CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
+        tap.enable();
+
+        log::info!("macOS keyboard event tap installed");
+        status(RuntimeStatus::Active);
+        CFRunLoop::run_current();
+        drop(tap);
+        Err("the event tap run loop exited".to_string())
+    }
+
+    fn handle_event(
+        event_type: CGEventType,
+        event: &CGEvent,
+        state: &Arc<Mutex<State>>,
+        pending: &Arc<PendingExpansion>,
+        paused: &PauseFlag,
+        port: &AtomicPtr<c_void>,
+    ) -> CallbackResult {
+        match event_type {
+            CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                log::warn!("macOS disabled the event tap ({event_type:?}); re-enabling");
+                let port = port.load(Ordering::Acquire);
+                if !port.is_null() {
+                    unsafe { CGEventTapEnable(port as CFMachPortRef, true) };
+                }
+                return CallbackResult::Keep;
+            }
+            _ => {}
+        }
+
+        if event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA)
+            == SCRIBLET_EVENT_MARKER
+        {
+            return CallbackResult::Keep;
+        }
+
+        let Ok(mut state) = state.lock() else {
+            return CallbackResult::Keep;
+        };
+        let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+        let flags = event.get_flags();
+
+        match event_type {
+            CGEventType::LeftMouseDown
+            | CGEventType::RightMouseDown
+            | CGEventType::OtherMouseDown => {
+                // A click moves the caret: the partial trigger is stale and a
+                // pending replacement would land in the wrong place.
+                pending.note_interruption();
+                state.matcher.reset();
+                CallbackResult::Keep
+            }
+            CGEventType::FlagsChanged => {
+                if is_shortcut(flags) {
+                    state.matcher.reset();
+                }
+                CallbackResult::Keep
+            }
+            CGEventType::KeyUp => {
+                if state.suppressed_key == Some(keycode) {
+                    state.suppressed_key = None;
+                }
+                CallbackResult::Keep
+            }
+            CGEventType::KeyDown => {
+                let autorepeat =
+                    event.get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT) != 0;
+                if autorepeat && state.suppressed_key == Some(keycode) {
+                    return CallbackResult::Drop;
+                }
+                handle_key_down(keycode, flags, event, &mut state, pending, paused)
+            }
+            _ => CallbackResult::Keep,
+        }
+    }
+
+    fn handle_key_down(
+        keycode: i64,
+        flags: CGEventFlags,
+        event: &CGEvent,
+        state: &mut State,
+        pending: &Arc<PendingExpansion>,
+        paused: &PauseFlag,
+    ) -> CallbackResult {
+        if pending.note_interruption() || paused.load(Ordering::Relaxed) || is_shortcut(flags) {
+            state.matcher.reset();
+            return CallbackResult::Keep;
+        }
+
+        let delimiter = match keycode {
+            KEY_SPACE => Some(' '),
+            KEY_TAB => Some('\t'),
+            KEY_RETURN | KEY_KEYPAD_ENTER => Some('\n'),
+            _ => None,
+        };
+        if let Some(delimiter) = delimiter {
+            // Shift+Enter, Shift+Tab, and Shift+Space mean something to the
+            // target application; leave them alone.
+            if flags.contains(CGEventFlags::CGEventFlagShift) {
+                state.matcher.reset();
+                return CallbackResult::Keep;
+            }
+            return match state.matcher.feed_char(delimiter) {
+                Some(expansion) => {
+                    state.suppressed_key = Some(keycode);
+                    start_injection(expansion, pending);
+                    CallbackResult::Drop
+                }
+                None => CallbackResult::Keep,
+            };
+        }
+
+        match keycode {
+            KEY_DELETE => state.matcher.backspace(),
+            KEY_ESCAPE | KEY_FORWARD_DELETE | KEY_HOME | KEY_END | KEY_PAGE_UP | KEY_PAGE_DOWN
+            | KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN => state.matcher.reset(),
+            _ => match typed_char(event) {
+                Some(ch) => {
+                    let _ = state.matcher.feed_char(ch);
+                }
+                None => state.matcher.reset(),
+            },
+        }
+        CallbackResult::Keep
+    }
+
+    /// Command, Control, or Option turn a key into a shortcut rather than text.
+    fn is_shortcut(flags: CGEventFlags) -> bool {
+        flags.intersects(
+            CGEventFlags::CGEventFlagCommand
+                | CGEventFlags::CGEventFlagControl
+                | CGEventFlags::CGEventFlagAlternate,
+        )
+    }
+
+    /// The character this key event types under the current layout and
+    /// modifiers, read from the event itself. `None` for dead keys, function
+    /// keys, and anything that is not exactly one printable character.
+    fn typed_char(event: &CGEvent) -> Option<char> {
+        let mut buffer = [0u16; 4];
+        let mut length: c_ulong = 0;
+        unsafe {
+            CGEventKeyboardGetUnicodeString(
+                event.as_ptr(),
+                buffer.len() as c_ulong,
+                &mut length,
+                buffer.as_mut_ptr(),
+            );
+        }
+        let units = buffer.get(..length as usize)?;
+        let mut chars = char::decode_utf16(units.iter().copied());
+        match (chars.next(), chars.next()) {
+            (Some(Ok(ch)), None) if !ch.is_control() => Some(ch),
+            _ => None,
+        }
+    }
+
+    fn start_injection(expansion: Expansion, pending: &Arc<PendingExpansion>) {
         pending.begin();
-        let injecting = Arc::clone(injecting);
         let pending = Arc::clone(pending);
         thread::spawn(move || {
             let plan = plan_injection(&expansion);
             // No frontmost-app check on macOS yet; interruptions still abort.
             match may_inject(pending.interruptions(), true) {
                 Ok(()) => {
-                    injecting.store(true, Ordering::Release);
                     if let Err(error) = inject(&plan) {
                         log::warn!("expansion injection failed: {error}");
                     }
-                    injecting.store(false, Ordering::Release);
                 }
                 Err(reason) => log::warn!("expansion skipped: {reason}"),
             }
             pending.finish();
         });
-
-        None
     }
 
     fn inject(plan: &InjectionPlan) -> Result<(), String> {
-        let mut enigo = Enigo::new(&Settings::default()).map_err(|error| error.to_string())?;
+        let settings = Settings {
+            event_source_user_data: Some(SCRIBLET_EVENT_MARKER),
+            ..Settings::default()
+        };
+        let mut enigo = Enigo::new(&settings).map_err(|error| error.to_string())?;
 
         for _ in 0..plan.backspaces {
             enigo

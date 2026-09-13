@@ -1,6 +1,6 @@
 [package]
 name = "textcompletion"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 build = "build.rs"
 description = "Scriblet: local-first text expansion for Windows and macOS"
@@ -29,9 +29,11 @@ rfd = { version = "0.15", default-features = false }
 tray-icon = "0.21"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
 enigo = "0.6.1"
+foreign-types = "0.5"
 macos-accessibility-client = "0.0.1"
-rdev = { version = "0.5.3", features = ["unstable_grab"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 odbc-api = { version = "29", default-features = false }
