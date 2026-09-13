@@ -25,6 +25,7 @@ pub mod storage;
 pub mod template;
 pub mod transfer;
 pub mod workspace;
+pub mod writer;
 
 /// Application name used for data directories, logs, and OS registration.
 pub const APP_NAME: &str = "Scriblet";
